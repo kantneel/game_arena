@@ -1,0 +1,1 @@
+"""Blitz chess match package.""" 
