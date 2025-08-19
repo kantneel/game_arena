@@ -49,6 +49,7 @@ PROMPT_TEMPLATE_NO_LEGAL_ACTIONS = """Let's play {game_short_name}. The current 
 {readable_state_str}
 The moves played so far are:
 {move_history}
+{time_info}
 You are playing as player {player_name}.
 It is now your turn. Play your strongest move. The move MUST be legal. Reason step by step to come up with your move, then output your final answer in the format "Final Answer: X" where X is your chosen move in {move_notation}."""
 
@@ -63,6 +64,7 @@ The current piece positions are:
 {piece_dict}
 The moves played so far are:
 {move_history}
+{time_info}
 You are playing as player {player_name}.
 It is now your turn. Play your strongest move. The move MUST be legal. Reason step by step to come up with your move, then output your final answer in the format "Final Answer: X" where X is your chosen move in {move_notation}."""
 
@@ -77,6 +79,7 @@ The current board is visualized below:
 {ascii_board}
 The moves played so far are:
 {move_history}
+{time_info}
 You are playing as player {player_name}.
 It is now your turn. Play your strongest move. The move MUST be legal. Reason step by step to come up with your move, then output your final answer in the format "Final Answer: X" where X is your chosen move in {move_notation}."""
 
@@ -87,6 +90,7 @@ PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_WITH_ASCII_BOARD_RETHINK_APPENDED = (
 
 PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_NO_HISTORY = """Let's play {game_short_name}. The current game state in {notation} is:
 {readable_state_str}
+{time_info}
 You are playing as player {player_name}.
 It is now your turn. Play your strongest move. The move MUST be legal. Reason step by step to come up with your move, then output your final answer in the format "Final Answer: X" where X is your chosen move in {move_notation}."""
 
@@ -97,6 +101,7 @@ The moves played so far are:
 {move_history}
 The list of legal moves is:
 {legal_actions}
+{time_info}
 You are playing as player {player_name}.
 It is now your turn. Choose the strongest move from the list of legal moves. Reason step by step to come up with your move, then output your final answer in the format "Final Answer: X" where X is your chosen move."""
 

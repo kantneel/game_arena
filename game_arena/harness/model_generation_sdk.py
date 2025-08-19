@@ -84,7 +84,21 @@ class AIStudioModel(model_generation.MultimodalModel):
     super().__init__(
         model_name, model_options=model_options, api_options=api_options
     )
-    # If API key is None, defaults to GOOGLE_API_KEY in environment.
+    # If API key is None, defaults to GEMINI_API_KEY in environment.
+    if api_key is None:
+      import os
+      try:
+        api_key = os.environ["GEMINI_API_KEY"]
+      except KeyError as e:
+        # Fallback to GOOGLE_API_KEY for backwards compatibility
+        try:
+          api_key = os.environ["GOOGLE_API_KEY"]
+        except KeyError:
+          logging.error(
+              "GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set. Please set one of them to use %s.",
+              self._model_name,
+          )
+          raise KeyError("Neither GEMINI_API_KEY nor GOOGLE_API_KEY environment variable is set") from e
     self._client = google_genai.Client(api_key=api_key)
 
   def _generate(
@@ -317,7 +331,7 @@ class OpenAIChatCompletionsModel(model_generation.MultimodalModel):
 
       return tournament_util.GenerateReturn(
           main_response=processed_stream.main_response,
-          main_response_and_thoughts="",
+          main_response_and_thoughts=processed_stream.main_response,
           request_for_logging=request_for_logging,
           response_for_logging=response_for_logging,
           generation_tokens=processed_stream.completion_tokens,
@@ -406,6 +420,7 @@ class AnthropicReturn:
   main_response_and_thoughts: str
   prompt_tokens: int
   generation_tokens: int
+  reasoning_tokens: int | None = None
 
 
 def _process_anthropic_stream(
@@ -423,6 +438,7 @@ def _process_anthropic_stream(
   main_response_and_thoughts = ""
   prompt_tokens = 0
   generation_tokens = 0
+  reasoning_tokens = None
   response_chunks = []
   for event in stream:
     response_chunks.append(event)
@@ -448,6 +464,11 @@ def _process_anthropic_stream(
       if event.usage.input_tokens is not None:
         prompt_tokens += event.usage.input_tokens
       generation_tokens += event.usage.output_tokens
+      # Extract thinking tokens if available in usage details
+      if hasattr(event.usage, 'output_tokens_thinking'):
+        if reasoning_tokens is None:
+          reasoning_tokens = 0
+        reasoning_tokens += event.usage.output_tokens_thinking
     elif event.type == "message_start":
       assert isinstance(
           event,
@@ -456,12 +477,18 @@ def _process_anthropic_stream(
       if event.message.usage.input_tokens is not None:
         prompt_tokens += event.message.usage.input_tokens
       generation_tokens += event.message.usage.output_tokens
+      # Extract thinking tokens if available in usage details
+      if hasattr(event.message.usage, 'output_tokens_thinking'):
+        if reasoning_tokens is None:
+          reasoning_tokens = 0
+        reasoning_tokens += event.message.usage.output_tokens_thinking
   return (
       AnthropicReturn(
           main_response=main_response,
           main_response_and_thoughts=main_response_and_thoughts,
           prompt_tokens=prompt_tokens,
           generation_tokens=generation_tokens,
+          reasoning_tokens=reasoning_tokens,
       ),
       response_chunks,
   )
@@ -481,11 +508,18 @@ def _process_anthropic_response(
     elif block.type == "thinking":
       assert isinstance(block, anthropic_types.ThinkingBlock)
       main_response_and_thoughts += block.thinking
+  
+  # Extract thinking tokens if available in usage details
+  reasoning_tokens = None
+  if hasattr(response.usage, 'output_tokens_thinking'):
+    reasoning_tokens = response.usage.output_tokens_thinking
+  
   return AnthropicReturn(
       main_response=main_response,
       main_response_and_thoughts=main_response_and_thoughts,
       prompt_tokens=response.usage.input_tokens,
       generation_tokens=response.usage.output_tokens,
+      reasoning_tokens=reasoning_tokens,
   )
 
 
@@ -596,7 +630,7 @@ class AnthropicModel(model_generation.Model):
         "config": config,
     }
 
-    # Anthropic does not return the reasoning token count separately.
+    # Convert AnthropicReturn to GenerateReturn with reasoning tokens
     return tournament_util.GenerateReturn(
         **dataclasses.asdict(anthropic_return),
         request_for_logging=request_for_logging,

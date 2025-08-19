@@ -25,6 +25,7 @@ dependencies = [
   "immutabledict",
   "open_spiel",
   "openai",
+  "pandas",
   "requests",
   "tenacity",
   # keep-sorted end
