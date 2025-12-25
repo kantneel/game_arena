@@ -21,7 +21,9 @@ def create_time_aware_prompt_substitutions(
     player_clock: utils.PlayerClock,
     opponent_clock: utils.PlayerClock,
     increment_seconds: int,
-    is_blitz: bool = True
+    is_blitz: bool = True,
+    use_dramatic_pressure: bool = False,
+    previous_response_analysis: str = ""
 ) -> Dict[str, str]:
     """Create prompt substitutions including time information."""
     base_substitutions = {
@@ -45,7 +47,18 @@ def create_time_aware_prompt_substitutions(
     }
     
     if is_blitz:
-        time_info = f"""
+        if use_dramatic_pressure:
+            # Use dramatic time pressure mode
+            dramatic_pressure = create_dramatic_time_pressure_text(
+                player_clock, opponent_clock, increment_seconds
+            )
+            dramatic_instruction = create_dramatic_instruction_text(player_clock.time_remaining)
+            base_substitutions["dramatic_time_pressure"] = dramatic_pressure
+            base_substitutions["dramatic_instruction"] = dramatic_instruction
+            base_substitutions["time_info"] = ""  # Dramatic pressure replaces time_info
+        else:
+            # Use normal time_info format
+            time_info = f"""
 BLITZ CHESS TIME INFORMATION:
 ⏰ Your remaining time: {utils.format_time(player_clock.time_remaining)}
 ⏰ Opponent's remaining time: {utils.format_time(opponent_clock.time_remaining)}
@@ -61,11 +74,96 @@ BLITZ CHESS TIME INFORMATION:
 
 Current time pressure level: {"🔴 HIGH" if player_clock.time_remaining < 60 else "🟡 MEDIUM" if player_clock.time_remaining < 120 else "🟢 LOW"}
 """
-        base_substitutions["time_info"] = time_info
+            base_substitutions["time_info"] = time_info
+            base_substitutions["dramatic_time_pressure"] = ""
+            base_substitutions["dramatic_instruction"] = "Reason step by step to come up with your move, then output your final answer in the format \"Final Answer: X\" where X is your chosen move in algebraic notation."
     else:
         base_substitutions["time_info"] = ""
+        base_substitutions["dramatic_time_pressure"] = ""
+        base_substitutions["dramatic_instruction"] = "Reason step by step to come up with your move, then output your final answer in the format \"Final Answer: X\" where X is your chosen move in algebraic notation."
+    
+    # Add stateful previous response analysis
+    base_substitutions["previous_response_analysis"] = previous_response_analysis
     
     return base_substitutions
+
+
+def create_dramatic_time_pressure_text(
+    player_clock: utils.PlayerClock,
+    opponent_clock: utils.PlayerClock,
+    increment_seconds: int
+) -> str:
+    """Generate dramatic time pressure text with ALL CAPS emphasis."""
+    
+    time_remaining = player_clock.time_remaining
+    
+    if time_remaining < 30:
+        urgency_level = "EXTREME"
+        pressure_color = "🔴🔴🔴"
+        dramatic_text = """
+🚨🚨🚨 CRITICAL TIME EMERGENCY!!! 🚨🚨🚨
+
+⚠️⚠️⚠️ YOU HAVE LESS THAN 30 SECONDS LEFT!!! ⚠️⚠️⚠️
+
+🔥🔥🔥 EVERY SECOND COUNTS - MOVE IMMEDIATELY OR LOSE!!! 🔥🔥🔥
+
+💥 DO NOT OVERTHINK! ANY REASONABLE MOVE IS BETTER THAN TIMING OUT! 💥
+💥 EVEN A RANDOM LEGAL MOVE BEATS RUNNING OUT OF TIME! 💥
+💥 SPEED IS MORE IMPORTANT THAN PERFECTION RIGHT NOW! 💥
+
+⏰ THE CLOCK IS YOUR BIGGEST ENEMY - NOT YOUR OPPONENT! ⏰"""
+    elif time_remaining < 60:
+        urgency_level = "HIGH"
+        pressure_color = "🔴🔴"
+        dramatic_text = """
+🚨🚨 TIME PRESSURE ALERT!!! 🚨🚨
+
+⚠️ LESS THAN 1 MINUTE REMAINING! ⚠️
+
+🔥 THINK FAST - EVERY SECOND MATTERS! 🔥
+🔥 QUICK GOOD MOVES BEAT SLOW PERFECT MOVES! 🔥
+🔥 TIME FORFEIT = INSTANT LOSS! 🔥
+
+⏰ PRIORITIZE SPEED OVER DEEP ANALYSIS! ⏰"""
+    elif time_remaining < 120:
+        urgency_level = "MEDIUM"
+        pressure_color = "🟡🟡"
+        dramatic_text = """
+⚠️ TIME PRESSURE BUILDING! ⚠️
+
+🔥 UNDER 2 MINUTES - START MOVING FASTER! 🔥
+⏰ BALANCE QUALITY WITH SPEED! ⏰
+💭 LIMIT YOUR THINKING TIME PER MOVE! 💭"""
+    else:
+        urgency_level = "LOW"
+        pressure_color = "🟢"
+        dramatic_text = """
+✅ COMFORTABLE TIME CUSHION ✅
+💭 You can afford some analysis, but don't waste time! 💭"""
+
+    return f"""
+{dramatic_text}
+
+{pressure_color} TIME PRESSURE LEVEL: {urgency_level} {pressure_color}
+⏰ YOUR TIME: {utils.format_time(time_remaining)}
+⏰ OPPONENT TIME: {utils.format_time(opponent_clock.time_remaining)}
+⏰ INCREMENT: +{increment_seconds}s per move
+
+🎯 REMEMBER: Running out of time = AUTOMATIC LOSS!!!
+🎯 A mediocre move in 5 seconds beats a brilliant move in 65 seconds when you only have 60 seconds left!
+"""
+
+
+def create_dramatic_instruction_text(time_remaining: float) -> str:
+    """Generate dramatic instruction text based on time remaining."""
+    if time_remaining < 30:
+        return "MOVE NOW!!! Think for maximum 3 seconds, then output your answer! Time is running out!!!"
+    elif time_remaining < 60:
+        return "Think quickly and decide fast! Limit yourself to 10 seconds of analysis maximum!"
+    elif time_remaining < 120:
+        return "Be efficient with your thinking time. Quick analysis, then move!"
+    else:
+        return "Reason step by step to come up with your move, then output your final answer in the format \"Final Answer: X\" where X is your chosen move in algebraic notation."
 
 
 class GameState:
@@ -127,7 +225,10 @@ class GameState:
         
         if player_info['player_clock'].time_remaining <= 0:
             print(colored(f"⏰ TIME FORFEIT! {player_info['player_name']} ran out of time!", "red"))
-            winner = self.black_name.lower() if current_player == 1 else self.white_name.lower()
+            
+            # Current player lost, so opponent wins
+            # Map the winning player to model_a or model_b based on color
+            winner = self._map_winning_color_to_model_id(current_player == 0)  # True if black wins, False if white wins
             result_string = "0-1" if current_player == 1 else "1-0"
             
             return self._create_game_stats(winner, result_string)
@@ -153,8 +254,8 @@ class GameState:
             player_name = self.white_name if is_white else self.black_name
             print(colored(f"❌ {player_name} exceeded max parsing failures ({max_failures}), game ends", "red"))
             
-            # Opponent wins
-            winner = self.black_name.lower() if is_white else self.white_name.lower()
+            # Opponent wins (if white failed, black wins; if black failed, white wins)
+            winner = self._map_winning_color_to_model_id(not is_white)  # True if black wins, False if white wins
             result_string = "0-1" if is_white else "1-0"
             return self._create_game_stats(winner, result_string)
         
@@ -163,7 +264,8 @@ class GameState:
     def record_move_to_collector(self, move_notation: str, player_info: dict, 
                                response, thinking_time: float, time_at_turn_start: float,
                                network_latency: float, retry_count: int, 
-                               board_state_before: str) -> None:
+                               board_state_before: str,
+                               prompt_substitutions: dict = None) -> None:
         """Record a move to the data collector for per-game CSV generation."""
         collector = data_collector.get_data_collector()
         
@@ -187,6 +289,34 @@ class GameState:
         if output_tokens is not None and prompt_tokens is not None:
             total_tokens = output_tokens + prompt_tokens
         
+        # Extract time pressure information from prompt substitutions
+        time_pressure_level = "LOW"
+        used_dramatic_prompts = False
+        prompt_template_used = "NO_LEGAL_ACTIONS"
+        previous_response_analysis_included = False
+        
+        if prompt_substitutions:
+            # Determine time pressure level
+            if time_at_turn_start < 30:
+                time_pressure_level = "EXTREME"
+            elif time_at_turn_start < 60:
+                time_pressure_level = "HIGH"
+            elif time_at_turn_start < 120:
+                time_pressure_level = "MEDIUM"
+            else:
+                time_pressure_level = "LOW"
+            
+            # Check if dramatic prompts were used
+            used_dramatic_prompts = bool(prompt_substitutions.get("dramatic_time_pressure", "").strip())
+            
+            # Check if stateful analysis was included
+            previous_response_analysis_included = bool(prompt_substitutions.get("previous_response_analysis", "").strip())
+        
+        # Get previous move data for trend analysis
+        previous_move_time, previous_move_efficiency = collector.get_previous_move_data(
+            self.game_number, player_info['player_name']
+        )
+        
         collector.record_move(
             game_number=self.game_number,
             who_played=player_info['player_name'],
@@ -201,20 +331,30 @@ class GameState:
             move_number=self.move_count + 1,
             color=color,
             network_latency=network_latency,
-            retry_count=retry_count
+            retry_count=retry_count,
+            # New time pressure parameters
+            time_pressure_level=time_pressure_level,
+            used_dramatic_prompts=used_dramatic_prompts,
+            prompt_template_used=prompt_template_used,
+            opponent_time_remaining=player_info['opponent_clock'].time_remaining,
+            time_increment=3,  # This should be passed in, but defaulting for now
+            previous_response_analysis_included=previous_response_analysis_included,
+            previous_move_time=previous_move_time,
+            previous_move_efficiency=previous_move_efficiency
         )
     
     def apply_move(self, move_notation: str, player_info: dict, network_latency: float, 
                    increment: int, response, retry_count: int, total_retry_time: float, 
                    thinking_time: float, board_state_before: str = None, 
-                   time_at_turn_start: float = None) -> bool:
+                   time_at_turn_start: float = None, prompt_substitutions: dict = None) -> bool:
         """Apply a move and record statistics. Returns True if successful."""
         try:
             # Record move to data collector if board state and turn start time provided
             if board_state_before is not None and time_at_turn_start is not None:
                 self.record_move_to_collector(
                     move_notation, player_info, response, thinking_time, 
-                    time_at_turn_start, network_latency, retry_count, board_state_before
+                    time_at_turn_start, network_latency, retry_count, board_state_before,
+                    prompt_substitutions
                 )
             
             # Record move statistics (keeping for backward compatibility)
@@ -255,10 +395,10 @@ class GameState:
             
             # Determine winner
             if white_score > black_score:
-                winner = self.white_name.lower()
+                winner = self._map_winning_color_to_model_id(False)  # White wins
                 print(colored(f"Game {self.game_number} result: {self.white_name} wins! ({result_string})", "green"))
             elif black_score > white_score:
-                winner = self.black_name.lower()
+                winner = self._map_winning_color_to_model_id(True)  # Black wins
                 print(colored(f"Game {self.game_number} result: {self.black_name} wins! ({result_string})", "green"))
             else:
                 winner = "draw"
@@ -273,6 +413,16 @@ class GameState:
                      f"{self.black_name}: {utils.format_time(self.black_clock.time_remaining)}", "blue"))
         
         return self._create_game_stats(winner, result_string)
+    
+    def _map_winning_color_to_model_id(self, black_wins: bool) -> str:
+        """
+        Map the winning color to model_a or model_b based on color assignments.
+        Returns:
+            "model_a" or "model_b"
+        """
+        # model_a wins if: (black wins and model_a plays black) OR (white wins and model_a plays white)
+        # This simplifies to: black_wins XOR model_a_plays_white
+        return "model_a" if black_wins != self.model_a_plays_white else "model_b"
     
     def _create_game_stats(self, winner: str, result_string: str) -> utils.GameStats:
         """Create GameStats object with current state."""

@@ -31,6 +31,9 @@ class PromptTemplate(enum.Enum):
   NO_LEGAL_ACTIONS_WITH_ASCII_BOARD_RETHINK_APPENDED = "NO_LEGAL_ACTIONS_WITH_ASCII_BOARD_RETHINK_APPENDED"
   WITH_BOARD_IMAGE = "WITH_BOARD_IMAGE"
   WITH_SVG_RENDERED_IMAGE = "WITH_SVG_RENDERED_IMAGE"
+  NO_LEGAL_ACTIONS_DRAMATIC_TIME_PRESSURE = "NO_LEGAL_ACTIONS_DRAMATIC_TIME_PRESSURE"
+  NO_LEGAL_ACTIONS_WITH_ASCII_BOARD_DRAMATIC_TIME_PRESSURE = "NO_LEGAL_ACTIONS_WITH_ASCII_BOARD_DRAMATIC_TIME_PRESSURE"
+  NO_LEGAL_ACTIONS_STATEFUL = "NO_LEGAL_ACTIONS_STATEFUL"
 
   @classmethod
   def from_string(cls, value: str) -> "PromptTemplate":
@@ -110,5 +113,34 @@ PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_PREFIX = """Let's play {game_short_name}. The c
 """
 
 PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_SUFFIX = """
+You are playing as player {player_name}.
+It is now your turn. Play your strongest move. The move MUST be legal. Reason step by step to come up with your move, then output your final answer in the format "Final Answer: X" where X is your chosen move in {move_notation}."""
+
+PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_DRAMATIC_TIME_PRESSURE = """Let's play {game_short_name}. The current game state in {notation} is:
+{readable_state_str}
+The moves played so far are:
+{move_history}
+{time_info}
+{dramatic_time_pressure}
+You are playing as player {player_name}.
+It is now your turn. Play your strongest move. The move MUST be legal. {dramatic_instruction}"""
+
+PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_WITH_ASCII_BOARD_DRAMATIC_TIME_PRESSURE = """Let's play {game_short_name}. The current game state in {notation} is:
+{readable_state_str}
+The current board is visualized below:
+{ascii_board}
+The moves played so far are:
+{move_history}
+{time_info}
+{dramatic_time_pressure}
+You are playing as player {player_name}.
+It is now your turn. Play your strongest move. The move MUST be legal. {dramatic_instruction}"""
+
+PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_STATEFUL = """Let's play {game_short_name}. The current game state in {notation} is:
+{readable_state_str}
+The moves played so far are:
+{move_history}
+{time_info}
+{previous_response_analysis}
 You are playing as player {player_name}.
 It is now your turn. Play your strongest move. The move MUST be legal. Reason step by step to come up with your move, then output your final answer in the format "Final Answer: X" where X is your chosen move in {move_notation}."""

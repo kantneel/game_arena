@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 import json
 import random
+import time
 import traceback
 from typing import Any, Generic, Protocol, TypeAlias, TypeVar, TypedDict
 
@@ -510,3 +511,258 @@ def build_default_rethink_agent(
       prompt_template=prompts.PromptTemplate.NO_LEGAL_ACTIONS_RETHINK_APPENDED,
   )
   return agent
+
+
+@dataclasses.dataclass
+class PreviousResponseInfo:
+  """Information about the previous model response."""
+  response_text: str
+  thinking_time: float
+  wall_clock_time: float
+  reasoning_tokens: int | None
+  total_tokens: int | None
+  move_made: str
+  time_remaining_after: float
+
+
+class ChessStatefulLLMAgent(ChessLLMAgent):
+  """Chess agent that includes previous response timing in prompts."""
+  
+  def __init__(
+      self,
+      model: model_generation.Model,
+      prompt_builder: PromptBuilder,
+      response_parser: ResponseParser,
+      *,
+      max_model_calls: int | None = None,
+      fallback_to_random_move: bool = True,
+      seed: int | None = None,
+  ):
+    super().__init__(
+        model=model,
+        prompt_builder=prompt_builder,
+        response_parser=response_parser,
+        max_model_calls=max_model_calls,
+        fallback_to_random_move=fallback_to_random_move,
+        seed=seed,
+    )
+    self.previous_responses: list[PreviousResponseInfo] = []
+    
+  def create_previous_response_analysis(self) -> str:
+    """Create the previous response timing feedback section."""
+    if not self.previous_responses:
+      return ""
+        
+    latest_response = self.previous_responses[-1]
+    
+    # Analyze response efficiency
+    tokens_per_second = 0
+    if latest_response.wall_clock_time > 0 and latest_response.reasoning_tokens:
+      tokens_per_second = latest_response.reasoning_tokens / latest_response.wall_clock_time
+        
+    efficiency_feedback = self._analyze_response_efficiency(
+        latest_response.wall_clock_time,
+        latest_response.reasoning_tokens,
+        latest_response.time_remaining_after
+    )
+    
+    return f"""
+📊 PREVIOUS RESPONSE ANALYSIS:
+Your last move: {latest_response.move_made}
+⏱️  Wall clock time spent: {latest_response.wall_clock_time:.1f} seconds
+🧠 Reasoning tokens used: {latest_response.reasoning_tokens or 'N/A'}
+⚡ Reasoning efficiency: {tokens_per_second:.1f} tokens/second
+⏰ Time remaining after move: {self._format_time(latest_response.time_remaining_after)}
+
+{efficiency_feedback}
+
+💡 Use this information to calibrate your thinking time for this move!
+"""
+
+  def _analyze_response_efficiency(
+      self, 
+      wall_clock_time: float, 
+      reasoning_tokens: int | None,
+      time_remaining: float
+  ) -> str:
+    """Analyze the efficiency of the previous response and provide feedback."""
+    
+    if wall_clock_time > 30:
+      if time_remaining < 60:
+        return f"🚨 WARNING: Your last response took {wall_clock_time:.1f}s when you had limited time! You must think much faster or risk timing out!"
+      else:
+        return f"⚠️ Your last response was quite slow ({wall_clock_time:.1f}s). Consider reducing thinking time."
+    elif wall_clock_time > 15:
+      return f"🟡 Your last response took {wall_clock_time:.1f}s. Good pace, but watch the clock."
+    elif wall_clock_time < 5:
+      if time_remaining > 180:  # More than 3 minutes left
+        return f"⚡ Very fast response ({wall_clock_time:.1f}s)! You might be able to afford slightly more analysis time."
+      else:
+        return f"⚡ Excellent speed ({wall_clock_time:.1f}s)! Perfect for time pressure situations."
+    else:
+      return f"✅ Good response time ({wall_clock_time:.1f}s). Well balanced!"
+
+  def _format_time(self, seconds: float) -> str:
+    """Format time as MM:SS.s"""
+    if seconds < 0:
+      return "00:00.0"
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    return f"{minutes:02d}:{secs:04.1f}"
+
+  def __call__(
+      self,
+      observation: Mapping[str, Any],
+      configuration: Mapping[str, Any],
+      **kwargs,
+  ) -> KaggleSpielActionWithExtras:
+    """Override to track response timing and add to stateful prompt."""
+    
+    # Record timing for the model call
+    start_time = time.time()
+    
+    # Call parent implementation
+    result = super().__call__(observation, configuration, **kwargs)
+    
+    # Record this response for next time
+    if result.generate_returns and len(result.generate_returns) > 0:
+      end_time = time.time()
+      wall_clock_time = end_time - start_time
+      
+      response = result.generate_returns[0]
+      if isinstance(response, str):
+        # Handle case where generate_returns might be JSON strings
+        try:
+          response_dict = json.loads(response)
+          reasoning_tokens = response_dict.get('reasoning_tokens')
+          total_tokens = response_dict.get('total_tokens') 
+        except:
+          reasoning_tokens = None
+          total_tokens = None
+      else:
+        reasoning_tokens = getattr(response, 'reasoning_tokens', None)
+        total_tokens = getattr(response, 'total_tokens', None)
+      
+      previous_response = PreviousResponseInfo(
+          response_text=result.thoughts or "",
+          thinking_time=wall_clock_time,
+          wall_clock_time=wall_clock_time,
+          reasoning_tokens=reasoning_tokens,
+          total_tokens=total_tokens,
+          move_made=result.actionString or "",
+          time_remaining_after=0.0  # This would need to be passed in from the game engine
+      )
+      
+      self.previous_responses.append(previous_response)
+      
+      # Keep only the last few responses to avoid prompt bloat
+      if len(self.previous_responses) > 3:
+        self.previous_responses = self.previous_responses[-3:]
+    
+    return result
+
+  def set_last_response_time_remaining(self, time_remaining: float):
+    """Set the time remaining after the last response for stateful feedback."""
+    if self.previous_responses:
+      # Update the most recent response's time_remaining_after
+      self.previous_responses[-1] = dataclasses.replace(
+          self.previous_responses[-1], 
+          time_remaining_after=time_remaining
+      )
+
+
+def build_dramatic_time_pressure_agent(
+    model: model_generation.Model,
+    *,
+    max_model_calls: int | None = None,
+    fallback_to_random_move: bool = True,
+    seed: int | None = None,
+) -> ChessLLMAgent:
+  """Builds a chess agent with dramatic time pressure prompts."""
+  
+  def dramatic_prompt_builder(pyspiel_state: pyspiel.State) -> str:
+    """Builds dramatic time pressure prompts - requires external clock info."""
+    # This is a placeholder - the actual clocks need to be injected
+    # from the blitz game engine when building prompts
+    chess_notations = game_notation_examples.GAME_SPECIFIC_NOTATIONS["chess"]
+    prompt_substitutions = {
+        "readable_state_str": tournament_util.convert_to_readable_state(
+            game_short_name="chess",
+            state_str=pyspiel_state.to_string(),
+            current_player=pyspiel_state.current_player(),
+        ),
+        "move_history": (
+            tournament_util.get_action_string_history(pyspiel_state) or "None"
+        ),
+        "player_name": chess_notations["player_map"][
+            pyspiel_state.current_player()
+        ],
+        "move_notation": chess_notations["move_notation"],
+        "notation": chess_notations["state_notation"],
+        "time_info": "",  # Will be filled by dramatic pressure text
+        "dramatic_time_pressure": "⚠️ TIME PRESSURE MODE ACTIVE - Clock information will be injected by game engine",
+        "dramatic_instruction": "Be ready for time pressure instructions!",
+    }
+    prompt = prompt_generator.generate_prompt_with_text_only(
+        prompt_template=prompts.PromptTemplate.NO_LEGAL_ACTIONS_DRAMATIC_TIME_PRESSURE,
+        game_short_name="chess",
+        **prompt_substitutions,
+    )
+    return prompt.prompt_text
+  
+  return ChessLLMAgent(
+      model=model,
+      prompt_builder=dramatic_prompt_builder,
+      response_parser=default_response_parser,
+      max_model_calls=max_model_calls,
+      fallback_to_random_move=fallback_to_random_move,
+      seed=seed,
+  )
+
+
+def build_stateful_agent(
+    model: model_generation.Model,
+    *,
+    max_model_calls: int | None = None,
+    fallback_to_random_move: bool = True,
+    seed: int | None = None,
+) -> ChessStatefulLLMAgent:
+  """Builds a chess agent with stateful previous response tracking."""
+  
+  def stateful_prompt_builder(pyspiel_state: pyspiel.State) -> str:
+    """Builds prompts with previous response analysis."""
+    # This is a placeholder - the actual previous response analysis 
+    # will be injected by the stateful agent
+    chess_notations = game_notation_examples.GAME_SPECIFIC_NOTATIONS["chess"]
+    prompt_substitutions = {
+        "readable_state_str": tournament_util.convert_to_readable_state(
+            game_short_name="chess",
+            state_str=pyspiel_state.to_string(),
+            current_player=pyspiel_state.current_player(),
+        ),
+        "move_history": (
+            tournament_util.get_action_string_history(pyspiel_state) or "None"
+        ),
+        "player_name": chess_notations["player_map"][
+            pyspiel_state.current_player()
+        ],
+        "move_notation": chess_notations["move_notation"],
+        "notation": chess_notations["state_notation"],
+        "time_info": "",  # Will be filled by blitz time info
+        "previous_response_analysis": "",  # Will be filled by stateful agent
+    }
+    prompt = prompt_generator.generate_prompt_with_text_only(
+        prompt_template=prompts.PromptTemplate.NO_LEGAL_ACTIONS_STATEFUL,
+        game_short_name="chess",
+        **prompt_substitutions,
+    )
+    return prompt.prompt_text
+  
+  return ChessStatefulLLMAgent(
+      model=model,
+      prompt_builder=stateful_prompt_builder,
+      response_parser=default_response_parser,
+      max_model_calls=max_model_calls,
+      fallback_to_random_move=fallback_to_random_move,
+      seed=seed,
+  )

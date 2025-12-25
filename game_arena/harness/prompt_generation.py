@@ -92,6 +92,12 @@ class PromptGeneratorText(PromptGeneratorSupportsText):
         )
       case prompts.PromptTemplate.WITH_LEGAL_ACTIONS:
         actual_template = prompts.PROMPT_TEMPLATE_WITH_LEGAL_ACTIONS
+      case prompts.PromptTemplate.NO_LEGAL_ACTIONS_DRAMATIC_TIME_PRESSURE:
+        actual_template = prompts.PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_DRAMATIC_TIME_PRESSURE
+      case prompts.PromptTemplate.NO_LEGAL_ACTIONS_WITH_ASCII_BOARD_DRAMATIC_TIME_PRESSURE:
+        actual_template = prompts.PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_WITH_ASCII_BOARD_DRAMATIC_TIME_PRESSURE
+      case prompts.PromptTemplate.NO_LEGAL_ACTIONS_STATEFUL:
+        actual_template = prompts.PROMPT_TEMPLATE_NO_LEGAL_ACTIONS_STATEFUL
       case _:
         raise ValueError(f"Unsupported prompt template: {prompt_template}")
     return tournament_util.ModelTextInput(

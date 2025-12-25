@@ -78,6 +78,12 @@ class MatchMetadata:
     draws: int = 0
     final_winner: str = ""
     match_duration_seconds: float = 0.0
+    
+    # New fields for time pressure features
+    dramatic_prompts_enabled: bool = False
+    stateful_agents_enabled: bool = False
+    dramatic_threshold_seconds: float = 60.0  # Time threshold for dramatic prompts
+    time_pressure_strategy: str = "none"  # "none", "dramatic", "stateful", "combined"
 
 
 @dataclasses.dataclass
@@ -147,6 +153,21 @@ class GameMoveRecord:
     timestamp: str  # ISO format timestamp
     network_latency: float
     retry_count: int
+    
+    # New fields for time pressure and stateful analysis
+    time_pressure_level: str  # "EXTREME", "HIGH", "MEDIUM", "LOW"
+    used_dramatic_prompts: bool  # Whether dramatic time pressure prompts were used
+    prompt_template_used: str  # The actual prompt template used
+    opponent_time_remaining: float  # Opponent's time when this move was made
+    time_increment: int  # Time increment per move
+    reasoning_efficiency: Optional[float]  # Reasoning tokens per second
+    previous_response_analysis_included: bool  # Whether stateful analysis was included
+    time_pressure_category: str  # "under_30s", "under_60s", "under_120s", "comfortable"
+    
+    # Stateful feedback metrics
+    previous_move_time: Optional[float]  # Time taken for previous move (for stateful analysis)
+    previous_move_efficiency: Optional[float]  # Previous reasoning efficiency
+    time_trend: Optional[str]  # "speeding_up", "slowing_down", "stable", "first_move"
 
 
 class BlitzDataCollector:
@@ -173,7 +194,11 @@ class BlitzDataCollector:
                    max_parsing_failures: int,
                    max_rethinks: int,
                    reasoning_budget: int,
-                   parser_choice: str) -> str:
+                   parser_choice: str,
+                   dramatic_prompts_enabled: bool = False,
+                   stateful_agents_enabled: bool = False,
+                   dramatic_threshold_seconds: float = 60.0,
+                   time_pressure_strategy: str = "none") -> str:
         """Start a new match and return the match ID."""
         timestamp = datetime.datetime.now()
         
@@ -199,7 +224,11 @@ class BlitzDataCollector:
             max_parsing_failures=max_parsing_failures,
             max_rethinks=max_rethinks,
             reasoning_budget=reasoning_budget,
-            parser_choice=parser_choice
+            parser_choice=parser_choice,
+            dramatic_prompts_enabled=dramatic_prompts_enabled,
+            stateful_agents_enabled=stateful_agents_enabled,
+            dramatic_threshold_seconds=dramatic_threshold_seconds,
+            time_pressure_strategy=time_pressure_strategy
         )
         
         return match_id
@@ -209,10 +238,32 @@ class BlitzDataCollector:
                    time_at_turn_start: float, thinking_tokens: Optional[int],
                    output_tokens: Optional[int], total_tokens: Optional[int],
                    move_number: int, color: str, network_latency: float, 
-                   retry_count: int) -> None:
+                   retry_count: int,
+                   # New time pressure parameters
+                   time_pressure_level: str = "LOW",
+                   used_dramatic_prompts: bool = False,
+                   prompt_template_used: str = "NO_LEGAL_ACTIONS",
+                   opponent_time_remaining: float = 0.0,
+                   time_increment: int = 3,
+                   previous_response_analysis_included: bool = False,
+                   previous_move_time: Optional[float] = None,
+                   previous_move_efficiency: Optional[float] = None) -> None:
         """Record a single move during gameplay."""
         if not self.current_match_id:
             raise ValueError("No active match. Call start_match() first.")
+        
+        # Calculate derived metrics
+        reasoning_efficiency = None
+        if thinking_tokens and time_taken > 0:
+            reasoning_efficiency = thinking_tokens / time_taken
+        
+        # Determine time pressure category
+        time_pressure_category = self._categorize_time_pressure(time_at_turn_start)
+        
+        # Determine time trend
+        time_trend = self._calculate_time_trend(
+            game_number, who_played, time_taken, previous_move_time
+        )
         
         move_record = GameMoveRecord(
             who_played=who_played,
@@ -228,7 +279,19 @@ class BlitzDataCollector:
             color=color,
             timestamp=datetime.datetime.now().isoformat(),
             network_latency=network_latency,
-            retry_count=retry_count
+            retry_count=retry_count,
+            # New time pressure fields
+            time_pressure_level=time_pressure_level,
+            used_dramatic_prompts=used_dramatic_prompts,
+            prompt_template_used=prompt_template_used,
+            opponent_time_remaining=opponent_time_remaining,
+            time_increment=time_increment,
+            reasoning_efficiency=reasoning_efficiency,
+            previous_response_analysis_included=previous_response_analysis_included,
+            time_pressure_category=time_pressure_category,
+            previous_move_time=previous_move_time,
+            previous_move_efficiency=previous_move_efficiency,
+            time_trend=time_trend
         )
         
         # Initialize game moves list if needed
@@ -236,6 +299,47 @@ class BlitzDataCollector:
             self.per_game_moves[game_number] = []
         
         self.per_game_moves[game_number].append(move_record)
+    
+    def _categorize_time_pressure(self, time_remaining: float) -> str:
+        """Categorize time pressure based on time remaining."""
+        if time_remaining < 30:
+            return "under_30s"
+        elif time_remaining < 60:
+            return "under_60s"
+        elif time_remaining < 120:
+            return "under_120s"
+        else:
+            return "comfortable"
+    
+    def _calculate_time_trend(self, game_number: int, player: str, current_time: float, 
+                             previous_time: Optional[float]) -> str:
+        """Calculate whether player is speeding up or slowing down."""
+        if previous_time is None:
+            return "first_move"
+        
+        time_diff = current_time - previous_time
+        threshold = 2.0  # seconds
+        
+        if abs(time_diff) < threshold:
+            return "stable"
+        elif time_diff > 0:
+            return "slowing_down"
+        else:
+            return "speeding_up"
+    
+    def get_previous_move_data(self, game_number: int, player: str) -> tuple[Optional[float], Optional[float]]:
+        """Get the previous move's time and efficiency for a player."""
+        if game_number not in self.per_game_moves:
+            return None, None
+        
+        moves = self.per_game_moves[game_number]
+        player_moves = [m for m in moves if m.who_played == player]
+        
+        if len(player_moves) == 0:
+            return None, None
+        
+        last_move = player_moves[-1]
+        return last_move.time_taken_seconds, last_move.reasoning_efficiency
     
     def record_game(self, game_stats: utils.GameStats, initial_time: float, increment: float) -> None:
         """Record a completed game."""
@@ -399,6 +503,15 @@ class BlitzDataCollector:
         # Save summary statistics
         self._save_summary_stats(self.current_match_dir)
         
+        # Save time pressure analysis
+        if self.match_metadata and (self.match_metadata.dramatic_prompts_enabled or 
+                                   self.match_metadata.stateful_agents_enabled):
+            time_pressure_analysis = self.generate_time_pressure_analysis()
+            if time_pressure_analysis:
+                with open(self.current_match_dir / "time_pressure_analysis.json", 'w') as f:
+                    json.dump(time_pressure_analysis, f, indent=2)
+                print(f"📊 Time pressure analysis saved")
+        
         print(f"📊 Match data saved to: {self.current_match_dir}")
     
     def _save_summary_stats(self, match_dir: Path) -> None:
@@ -437,6 +550,139 @@ class BlitzDataCollector:
         
         with open(match_dir / "summary_stats.json", 'w') as f:
             json.dump(summary, f, indent=2)
+    
+    def generate_time_pressure_analysis(self) -> Dict[str, Any]:
+        """Generate comprehensive time pressure analysis."""
+        if not self.per_game_moves:
+            return {}
+        
+        all_moves = []
+        for game_moves in self.per_game_moves.values():
+            all_moves.extend(game_moves)
+        
+        analysis = {
+            "time_pressure_distribution": self._analyze_time_pressure_distribution(all_moves),
+            "dramatic_prompt_effectiveness": self._analyze_dramatic_prompt_effectiveness(all_moves),
+            "stateful_analysis_impact": self._analyze_stateful_impact(all_moves),
+            "time_trend_patterns": self._analyze_time_trends(all_moves),
+            "reasoning_efficiency_by_pressure": self._analyze_efficiency_by_pressure(all_moves),
+            "prompt_template_performance": self._analyze_prompt_template_performance(all_moves)
+        }
+        
+        return analysis
+    
+    def _analyze_time_pressure_distribution(self, moves: List[GameMoveRecord]) -> Dict[str, Any]:
+        """Analyze distribution of moves across time pressure categories."""
+        pressure_counts = {"under_30s": 0, "under_60s": 0, "under_120s": 0, "comfortable": 0}
+        pressure_avg_times = {"under_30s": [], "under_60s": [], "under_120s": [], "comfortable": []}
+        
+        for move in moves:
+            category = move.time_pressure_category
+            pressure_counts[category] += 1
+            pressure_avg_times[category].append(move.time_taken_seconds)
+        
+        return {
+            "move_counts_by_pressure": pressure_counts,
+            "avg_time_by_pressure": {
+                k: sum(v) / len(v) if v else 0 
+                for k, v in pressure_avg_times.items()
+            },
+            "total_moves": len(moves)
+        }
+    
+    def _analyze_dramatic_prompt_effectiveness(self, moves: List[GameMoveRecord]) -> Dict[str, Any]:
+        """Analyze effectiveness of dramatic prompts vs normal prompts."""
+        dramatic_moves = [m for m in moves if m.used_dramatic_prompts]
+        normal_moves = [m for m in moves if not m.used_dramatic_prompts]
+        
+        if not dramatic_moves:
+            return {"error": "No dramatic prompt moves found"}
+        
+        return {
+            "dramatic_moves_count": len(dramatic_moves),
+            "normal_moves_count": len(normal_moves),
+            "dramatic_avg_time": sum(m.time_taken_seconds for m in dramatic_moves) / len(dramatic_moves),
+            "normal_avg_time": sum(m.time_taken_seconds for m in normal_moves) / len(normal_moves) if normal_moves else 0,
+            "dramatic_avg_efficiency": self._avg_efficiency(dramatic_moves),
+            "normal_avg_efficiency": self._avg_efficiency(normal_moves),
+            "dramatic_under_pressure": len([m for m in dramatic_moves if m.time_pressure_category in ["under_30s", "under_60s"]]),
+            "dramatic_total": len(dramatic_moves)
+        }
+    
+    def _analyze_stateful_impact(self, moves: List[GameMoveRecord]) -> Dict[str, Any]:
+        """Analyze impact of stateful response analysis."""
+        stateful_moves = [m for m in moves if m.previous_response_analysis_included]
+        non_stateful_moves = [m for m in moves if not m.previous_response_analysis_included]
+        
+        if not stateful_moves:
+            return {"error": "No stateful moves found"}
+        
+        return {
+            "stateful_moves_count": len(stateful_moves),
+            "non_stateful_moves_count": len(non_stateful_moves),
+            "stateful_avg_time": sum(m.time_taken_seconds for m in stateful_moves) / len(stateful_moves),
+            "non_stateful_avg_time": sum(m.time_taken_seconds for m in non_stateful_moves) / len(non_stateful_moves) if non_stateful_moves else 0,
+            "stateful_avg_efficiency": self._avg_efficiency(stateful_moves),
+            "non_stateful_avg_efficiency": self._avg_efficiency(non_stateful_moves)
+        }
+    
+    def _analyze_time_trends(self, moves: List[GameMoveRecord]) -> Dict[str, Any]:
+        """Analyze time trend patterns."""
+        trend_counts = {"speeding_up": 0, "slowing_down": 0, "stable": 0, "first_move": 0}
+        
+        for move in moves:
+            if move.time_trend:
+                trend_counts[move.time_trend] += 1
+        
+        return trend_counts
+    
+    def _analyze_efficiency_by_pressure(self, moves: List[GameMoveRecord]) -> Dict[str, Any]:
+        """Analyze reasoning efficiency by time pressure level."""
+        pressure_efficiency = {"under_30s": [], "under_60s": [], "under_120s": [], "comfortable": []}
+        
+        for move in moves:
+            if move.reasoning_efficiency is not None:
+                pressure_efficiency[move.time_pressure_category].append(move.reasoning_efficiency)
+        
+        return {
+            category: {
+                "avg_efficiency": sum(effs) / len(effs) if effs else 0,
+                "move_count": len(effs)
+            }
+            for category, effs in pressure_efficiency.items()
+        }
+    
+    def _analyze_prompt_template_performance(self, moves: List[GameMoveRecord]) -> Dict[str, Any]:
+        """Analyze performance by prompt template."""
+        template_stats = {}
+        
+        for move in moves:
+            template = move.prompt_template_used
+            if template not in template_stats:
+                template_stats[template] = {
+                    "move_count": 0,
+                    "total_time": 0,
+                    "efficiencies": []
+                }
+            
+            template_stats[template]["move_count"] += 1
+            template_stats[template]["total_time"] += move.time_taken_seconds
+            if move.reasoning_efficiency is not None:
+                template_stats[template]["efficiencies"].append(move.reasoning_efficiency)
+        
+        # Calculate averages
+        for template, stats in template_stats.items():
+            stats["avg_time"] = stats["total_time"] / stats["move_count"] if stats["move_count"] > 0 else 0
+            stats["avg_efficiency"] = sum(stats["efficiencies"]) / len(stats["efficiencies"]) if stats["efficiencies"] else 0
+            del stats["total_time"]
+            del stats["efficiencies"]
+        
+        return template_stats
+    
+    def _avg_efficiency(self, moves: List[GameMoveRecord]) -> float:
+        """Calculate average reasoning efficiency for a list of moves."""
+        efficiencies = [m.reasoning_efficiency for m in moves if m.reasoning_efficiency is not None]
+        return sum(efficiencies) / len(efficiencies) if efficiencies else 0.0
 
 
 def create_analysis_notebook(match_id: str, data_dir: str = "_results") -> None:
