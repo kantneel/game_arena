@@ -24,17 +24,23 @@ class ModelRegistry(enum.Enum):
   """Model registry for Kaggle Game Arena."""
   # keep-sorted start
   ANTHROPIC_CLAUDE_OPUS_4 = "claude-opus-4-20250514"
+  ANTHROPIC_CLAUDE_OPUS_4_5 = "claude-opus-4-5-20251101"
   ANTHROPIC_CLAUDE_SONNET_4 = "claude-sonnet-4-20250514"
+  ANTHROPIC_CLAUDE_SONNET_4_5 = "claude-sonnet-4-5-20250929"
   DEEPSEEK_R1 = "deepseek-ai/DeepSeek-R1-0528"
   GEMINI_2_5_FLASH = "gemini-2.5-flash"
   GEMINI_2_5_PRO = "gemini-2.5-pro"
+  GEMINI_3_FLASH = "gemini-3-flash-preview"
+  GEMINI_3_PRO = "gemini-3-pro-preview"
   KIMI_K2 = "moonshotai/Kimi-K2-Instruct"
   OPENAI_GPT_4_1 = "gpt-4.1-2025-04-14"
+  OPENAI_GPT_5_2 = "gpt-5.2-2025-12-11"
   OPENAI_O3 = "o3-2025-04-16"
   OPENAI_O4_MINI = "o4-mini-2025-04-16"
   QWEN_3 = "Qwen/Qwen3-235B-A22B-Thinking-2507"
   QWEN_3_PARALLEL_THREE = "Qwen/Qwen3-235B-A22B-Thinking-2507"
   XAI_GROK_4 = "grok-4-0709"
+  XAI_GROK_4_1 = "grok-4-1-fast-reasoning"
   # keep-sorted end
 
   def build(self, api_key: str, **kwargs):
@@ -67,6 +73,34 @@ class ModelRegistry(enum.Enum):
             api_key=api_key,
             **kwargs,
         )
+      case ModelRegistry.ANTHROPIC_CLAUDE_SONNET_4_5:
+        default_kwargs = {
+            "api_options": {"stream": True},
+            "model_options": {
+                "max_tokens": 64000,
+                "thinking": {"type": "enabled", "budget_tokens": 32000}
+            },
+        }
+        kwargs = default_kwargs | kwargs
+        return model_generation_sdk.AnthropicModel(
+            model_name=self.value,
+            api_key=api_key,
+            **kwargs,
+        )
+      case ModelRegistry.ANTHROPIC_CLAUDE_OPUS_4_5:
+        default_kwargs = {
+            "api_options": {"stream": True},
+            "model_options": {
+                "max_tokens": 64000,
+                "thinking": {"type": "enabled", "budget_tokens": 48000}
+            },
+        }
+        kwargs = default_kwargs | kwargs
+        return model_generation_sdk.AnthropicModel(
+            model_name=self.value,
+            api_key=api_key,
+            **kwargs,
+        )
       case (
           ModelRegistry.DEEPSEEK_R1
           | ModelRegistry.KIMI_K2
@@ -84,7 +118,12 @@ class ModelRegistry(enum.Enum):
             api_options={"parallel_attempts": 3, "timeout": 3600},
             **kwargs,
         )
-      case ModelRegistry.GEMINI_2_5_FLASH | ModelRegistry.GEMINI_2_5_PRO:
+      case (
+          ModelRegistry.GEMINI_2_5_FLASH
+          | ModelRegistry.GEMINI_2_5_PRO
+          | ModelRegistry.GEMINI_3_FLASH
+          | ModelRegistry.GEMINI_3_PRO
+      ):
         default_kwargs = {
             "api_options": {"include_thoughts": True},
         }
@@ -96,6 +135,7 @@ class ModelRegistry(enum.Enum):
         )
       case (
           ModelRegistry.OPENAI_GPT_4_1
+          | ModelRegistry.OPENAI_GPT_5_2
           | ModelRegistry.OPENAI_O3
           | ModelRegistry.OPENAI_O4_MINI
       ):
@@ -104,7 +144,7 @@ class ModelRegistry(enum.Enum):
             api_key=api_key,
             **kwargs,
         )
-      case ModelRegistry.XAI_GROK_4:
+      case ModelRegistry.XAI_GROK_4 | ModelRegistry.XAI_GROK_4_1:
         default_kwargs = {
             "api_options": {"stream": True},
         }

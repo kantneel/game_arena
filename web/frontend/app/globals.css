@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-display: "Cabinet Grotesk", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", monospace;
+  }
+
+  body {
+    @apply bg-arena-bg text-gray-100 antialiased;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-arena-card border border-arena-border rounded-xl;
+  }
+
+  .card-hover {
+    @apply card transition-all duration-200 hover:border-arena-accent/50 hover:shadow-lg hover:shadow-arena-accent/10;
+  }
+
+  .btn-primary {
+    @apply bg-arena-accent hover:bg-arena-accent-dim text-white font-medium px-4 py-2 rounded-lg transition-colors;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-win {
+    @apply badge bg-arena-win/20 text-arena-win;
+  }
+
+  .badge-loss {
+    @apply badge bg-arena-loss/20 text-arena-loss;
+  }
+
+  .badge-draw {
+    @apply badge bg-arena-draw/20 text-arena-draw;
+  }
+
+  .badge-live {
+    @apply badge bg-red-500/20 text-red-400 animate-pulse-slow;
+  }
+
+  .stat-card {
+    @apply card p-4;
+  }
+
+  .stat-value {
+    @apply text-2xl font-bold text-white;
+  }
+
+  .stat-label {
+    @apply text-sm text-gray-400;
+  }
+}
+
+/* Chess piece colors for dark theme */
+.chess-board-dark .white-square {
+  background-color: #b7c0d8;
+}
+
+.chess-board-dark .black-square {
+  background-color: #6b7280;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #12121a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2e2e3e;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3e3e4e;
+}
+

@@ -28,6 +28,7 @@ dependencies = [
   "pandas",
   "requests",
   "tenacity",
+  "termcolor",
   # keep-sorted end
 ]
 
@@ -38,18 +39,32 @@ dynamic = ["version"]
 homepage = "https://github.com/google-deepmind/game_arena"
 repository = "https://github.com/google-deepmind/game_arena"
 changelog = "https://github.com/google-deepmind/game_arena/blob/main/CHANGELOG.md"
-# documentation = ""
+
+[project.scripts]
+# CLI commands
+game-arena-web = "web.backend.main:run_server"
 
 [project.optional-dependencies]
 # Development deps (unittest, linting, formating,...)
 # Installed through `pip install -e .[dev]`
 dev = [
-  # For demo scripts and testing:
   "absl-py",
-  "termcolor",
-  # Development:
   "pylint>=2.6.0",
   "pyink",
+]
+
+# Web dashboard dependencies
+# Installed through `pip install -e .[web]`
+web = [
+  "fastapi>=0.109.0",
+  "uvicorn[standard]>=0.27.0",
+  "websockets>=12.0",
+]
+
+# Install everything: `pip install -e .[all]`
+all = [
+  "game_arena[dev]",
+  "game_arena[web]",
 ]
 
 [tool.pyink]

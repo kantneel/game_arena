@@ -87,7 +87,19 @@ _SHOW_REASONING_TRACES = flags.DEFINE_bool(
 _REASONING_BUDGET = flags.DEFINE_integer(
     "reasoning_budget",
     8000,
-    "Token budget for model reasoning (Gemini only, kept low for blitz).",
+    "Token budget for model reasoning (default, used if per-model budget not set).",
+)
+
+_REASONING_BUDGET_A = flags.DEFINE_integer(
+    "reasoning_budget_a",
+    0,  # 0 means use the global reasoning_budget
+    "Token budget for Model A reasoning (0 = use global reasoning_budget).",
+)
+
+_REASONING_BUDGET_B = flags.DEFINE_integer(
+    "reasoning_budget_b",
+    0,  # 0 means use the global reasoning_budget
+    "Token budget for Model B reasoning (0 = use global reasoning_budget).",
 )
 
 _FIRST_TO = flags.DEFINE_integer(

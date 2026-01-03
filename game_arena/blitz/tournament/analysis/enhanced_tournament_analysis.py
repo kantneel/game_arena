@@ -16,7 +16,7 @@ import datetime
 import warnings
 
 from game_arena.blitz import data_collector
-from game_arena.blitz.move_analysis.move_analyzer import MoveQualityAnalyzer, MoveAnalysis
+from game_arena.blitz.analysis.stockfish import MoveQualityAnalyzer, MoveAnalysis
 
 
 class EnhancedTournamentAnalyzer:
