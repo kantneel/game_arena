@@ -90,6 +90,7 @@ class MatchService:
             rethinking_enabled=metadata.get("rethinking_enabled", False),
             games=games,
             current_game=current_game,
+            notes=metadata.get("notes"),
         )
     
     def get_game(self, match_id: str, game_number: int) -> Optional[GameDetail]:
@@ -115,18 +116,41 @@ class MatchService:
         # Load moves
         moves_file = match_dir / f"game_{game_number}_moves.csv"
         moves = []
+        
+        # Load Stockfish analysis if available
+        analysis_data = self._load_move_analysis(match_dir, game_number)
+        
         if moves_file.exists():
             moves_df = pd.read_csv(moves_file)
             for _, row in moves_df.iterrows():
+                move_num = int(row.get("move_number", 0))
+                
+                # Get analysis for this move if available
+                analysis = analysis_data.get(move_num, {}) if analysis_data else {}
+                
+                # Calculate time remaining AFTER the move (time_before - time_taken + increment)
+                time_before = float(row.get("time_available_at_turn_start", 0))
+                time_taken = float(row.get("time_taken_seconds", 0))
+                increment = float(row.get("time_increment", 3))
+                time_after = max(0, time_before - time_taken + increment)
+                
                 moves.append(MoveRecord(
-                    move_number=int(row.get("move_number", 0)),
+                    move_number=move_num,
                     player=row.get("who_played", ""),
                     color=row.get("color", ""),
                     move=row.get("move_played", ""),
                     fen_before=row.get("board_state_before_move", ""),
-                    time_taken=float(row.get("time_taken_seconds", 0)),
-                    time_remaining=float(row.get("time_available_at_turn_start", 0)),
+                    time_taken=time_taken,
+                    time_remaining=time_after,
                     thinking_tokens=self._safe_int(row.get("thinking_tokens")),
+                    centipawn_loss=self._safe_float(analysis.get("centipawn_loss")),
+                    is_best_move=analysis.get("played_move_rank_among_top") == 1.0 if analysis.get("played_move_rank_among_top") is not None else None,
+                    is_blunder=self._safe_float(analysis.get("centipawn_loss", 0)) >= 100 if analysis.get("centipawn_loss") is not None else None,
+                    best_move=analysis.get("best_move_san"),
+                    win_probability_loss=self._safe_float(analysis.get("win_probability_loss")),
+                    num_legal_moves=self._safe_int(analysis.get("num_legal_moves")),
+                    eval_sharpness=self._safe_int(analysis.get("eval_sharpness")),
+                    position_eval_abs=self._safe_int(analysis.get("position_eval_abs")),
                 ))
         
         # Determine white/black models
@@ -172,19 +196,41 @@ class MatchService:
         moves_file = match_dir / f"game_{game_number}_moves.csv"
         moves = []
         
+        # Load Stockfish analysis if available
+        analysis_data = self._load_move_analysis(match_dir, game_number)
+        
         if moves_file.exists():
             try:
                 moves_df = pd.read_csv(moves_file)
                 for _, row in moves_df.iterrows():
+                    move_num = int(row.get("move_number", 0))
+                    
+                    # Get analysis for this move if available
+                    analysis = analysis_data.get(move_num, {}) if analysis_data else {}
+                    
+                    # Calculate time remaining AFTER the move (time_before - time_taken + increment)
+                    time_before = float(row.get("time_available_at_turn_start", 0))
+                    time_taken = float(row.get("time_taken_seconds", 0))
+                    increment = float(row.get("time_increment", 3))
+                    time_after = max(0, time_before - time_taken + increment)
+                    
                     moves.append(MoveRecord(
-                        move_number=int(row.get("move_number", 0)),
+                        move_number=move_num,
                         player=row.get("who_played", ""),
                         color=row.get("color", ""),
                         move=row.get("move_played", ""),
                         fen_before=row.get("board_state_before_move", ""),
-                        time_taken=float(row.get("time_taken_seconds", 0)),
-                        time_remaining=float(row.get("time_available_at_turn_start", 0)),
+                        time_taken=time_taken,
+                        time_remaining=time_after,
                         thinking_tokens=self._safe_int(row.get("thinking_tokens")),
+                        centipawn_loss=self._safe_float(analysis.get("centipawn_loss")),
+                        is_best_move=analysis.get("played_move_rank_among_top") == 1.0 if analysis.get("played_move_rank_among_top") is not None else None,
+                        is_blunder=self._safe_float(analysis.get("centipawn_loss", 0)) >= 100 if analysis.get("centipawn_loss") is not None else None,
+                        best_move=analysis.get("best_move_san"),
+                        win_probability_loss=self._safe_float(analysis.get("win_probability_loss")),
+                        num_legal_moves=self._safe_int(analysis.get("num_legal_moves")),
+                        eval_sharpness=self._safe_int(analysis.get("eval_sharpness")),
+                        position_eval_abs=self._safe_int(analysis.get("position_eval_abs")),
                     ))
             except Exception as e:
                 print(f"Error reading moves file: {e}")
@@ -230,13 +276,27 @@ class MatchService:
             else:
                 white_model, black_model = model_b, model_a
             
+            # Recalculate termination reason based on clock times (fixes old data bug)
+            stored_termination = row.get("termination_reason", "")
+            model_a_final = float(row.get("model_a_final_time", 999))
+            model_b_final = float(row.get("model_b_final_time", 999))
+            model_a_failures = int(row.get("model_a_parsing_failures", 0))
+            model_b_failures = int(row.get("model_b_parsing_failures", 0))
+            
+            if model_a_final <= 0 or model_b_final <= 0:
+                termination = "time_forfeit"
+            elif model_a_failures >= 3 or model_b_failures >= 3:
+                termination = "parsing_failure"
+            else:
+                termination = stored_termination
+            
             games.append(GameSummary(
                 game_number=int(row.get("game_number", 0)),
                 white_model=white_model,
                 black_model=black_model,
                 result=row.get("result_string", ""),
                 winner=row.get("winner", ""),
-                termination=row.get("termination_reason", ""),
+                termination=termination,
                 total_moves=int(row.get("total_moves", 0)),
                 duration_seconds=float(row.get("game_duration_seconds", 0)),
             ))
@@ -245,6 +305,44 @@ class MatchService:
     
     def _to_match_summary(self, metadata: dict) -> MatchSummary:
         """Convert metadata dict to MatchSummary."""
+        # Determine status: completed, live, or abandoned
+        model_a_wins = metadata.get("model_a_wins", 0)
+        model_b_wins = metadata.get("model_b_wins", 0)
+        max_wins = max(model_a_wins, model_b_wins)
+        
+        # Get first_to from metadata, or infer from max wins for older matches
+        first_to = metadata.get("first_to")
+        if first_to is None:
+            # For old matches without first_to, infer from the max wins
+            # If someone has won, that's likely the first_to value
+            first_to = max_wins if max_wins > 0 else 1
+        
+        # Check if match is complete based on score
+        # A match is complete if one player has reached the first_to threshold
+        is_score_complete = max_wins >= first_to or (max_wins >= 1 and metadata.get("final_winner"))
+        
+        if metadata.get("end_time") or is_score_complete:
+            status = "completed"
+            # Determine winner from score if not set
+            if not metadata.get("final_winner") and model_a_wins != model_b_wins:
+                if model_a_wins > model_b_wins:
+                    metadata["final_winner"] = "model_a"
+                else:
+                    metadata["final_winner"] = "model_b"
+        else:
+            # Check if match is actually live (updated recently) or abandoned
+            last_updated = metadata.get("last_updated") or metadata.get("start_time")
+            if last_updated:
+                try:
+                    update_time = datetime.fromisoformat(last_updated)
+                    time_since_update = (datetime.now() - update_time).total_seconds()
+                    # If not updated in 30 minutes, consider it abandoned
+                    status = "live" if time_since_update < 1800 else "completed"
+                except (ValueError, TypeError):
+                    status = "completed"
+            else:
+                status = "completed"
+        
         return MatchSummary(
             match_id=metadata.get("match_id", ""),
             model_a=metadata.get("model_a", ""),
@@ -257,7 +355,8 @@ class MatchService:
             started_at=self._parse_datetime(metadata.get("start_time")),
             ended_at=self._parse_datetime(metadata.get("end_time")),
             time_control=metadata.get("time_control", ""),
-            status="completed" if metadata.get("end_time") else "live",
+            status=status,
+            notes=metadata.get("notes"),
         )
     
     def _parse_datetime(self, dt_str: Optional[str]) -> datetime:
@@ -276,5 +375,50 @@ class MatchService:
         try:
             return int(value)
         except (ValueError, TypeError):
+            return None
+    
+    def _safe_float(self, value) -> Optional[float]:
+        """Safely convert value to float, returning None if not possible."""
+        if value is None or pd.isna(value):
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+    
+    def _load_move_analysis(self, match_dir: Path, game_number: int) -> Optional[dict]:
+        """Load Stockfish move analysis for a specific game.
+        
+        Returns a dict mapping move_number -> analysis data.
+        """
+        # Try game-specific analysis file first
+        analysis_file = match_dir / f"game_{game_number}_move_analysis.csv"
+        
+        # Fall back to complete analysis file
+        if not analysis_file.exists():
+            analysis_file = match_dir / "complete_move_analysis.csv"
+        
+        if not analysis_file.exists():
+            return None
+        
+        try:
+            df = pd.read_csv(analysis_file)
+            
+            # Filter to specific game if using complete file
+            if "game_number" in df.columns:
+                df = df[df["game_number"] == game_number]
+            
+            if df.empty:
+                return None
+            
+            # Build lookup dict by move number
+            result = {}
+            for _, row in df.iterrows():
+                move_num = int(row.get("move_number", 0))
+                result[move_num] = row.to_dict()
+            
+            return result
+        except Exception as e:
+            print(f"Error loading move analysis: {e}")
             return None
 

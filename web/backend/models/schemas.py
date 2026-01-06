@@ -20,6 +20,7 @@ class MatchSummary(BaseModel):
     ended_at: Optional[datetime] = None
     time_control: str
     status: str  # "completed", "live"
+    notes: Optional[str] = None  # Optional notes/tags for experiment tracking
 
 
 class MatchDetail(BaseModel):
@@ -38,6 +39,7 @@ class MatchDetail(BaseModel):
     rethinking_enabled: bool
     games: list["GameSummary"]
     current_game: int = 0  # Current game being played (for live matches)
+    notes: Optional[str] = None  # Optional notes/tags for experiment tracking
 
 
 class GameSummary(BaseModel):
@@ -76,6 +78,16 @@ class MoveRecord(BaseModel):
     time_taken: float
     time_remaining: float
     thinking_tokens: Optional[int] = None
+    # Stockfish analysis (populated if move analysis was run)
+    centipawn_loss: Optional[float] = None
+    is_best_move: Optional[bool] = None
+    is_blunder: Optional[bool] = None  # True if CP loss >= 100
+    best_move: Optional[str] = None  # The engine's preferred move
+    win_probability_loss: Optional[float] = None  # WP loss from 0-1
+    # Position complexity metrics
+    num_legal_moves: Optional[int] = None  # Number of legal moves available
+    eval_sharpness: Optional[int] = None  # CP diff between best and 2nd best move
+    position_eval_abs: Optional[int] = None  # Absolute evaluation in CP
 
 
 class ModelStats(BaseModel):

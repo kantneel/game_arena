@@ -51,6 +51,10 @@ dev = [
   "absl-py",
   "pylint>=2.6.0",
   "pyink",
+  "pytest>=7.0.0",
+  "pytest-asyncio>=0.21.0",
+  "httpx>=0.25.0",  # For FastAPI TestClient
+  "tqdm>=4.65.0",  # Progress bars for offline evaluation
 ]
 
 # Web dashboard dependencies

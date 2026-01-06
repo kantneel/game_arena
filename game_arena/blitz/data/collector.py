@@ -40,10 +40,13 @@ class BlitzDataCollector:
                    max_rethinks: int,
                    reasoning_budget: int,
                    parser_choice: str,
+                   first_to: int = 0,
+                   total_games: int = 0,
                    dramatic_prompts_enabled: bool = False,
                    stateful_agents_enabled: bool = False,
                    dramatic_threshold_seconds: float = 60.0,
-                   time_pressure_strategy: str = "none") -> str:
+                   time_pressure_strategy: str = "none",
+                   notes: Optional[str] = None) -> str:
         """Start a new match and return the match ID."""
         timestamp = datetime.datetime.now()
         
@@ -70,10 +73,13 @@ class BlitzDataCollector:
             max_rethinks=max_rethinks,
             reasoning_budget=reasoning_budget,
             parser_choice=parser_choice,
+            first_to=first_to,
+            total_games=total_games,
             dramatic_prompts_enabled=dramatic_prompts_enabled,
             stateful_agents_enabled=stateful_agents_enabled,
             dramatic_threshold_seconds=dramatic_threshold_seconds,
-            time_pressure_strategy=time_pressure_strategy
+            time_pressure_strategy=time_pressure_strategy,
+            notes=notes
         )
         
         # Save initial metadata so the match appears in the web UI immediately
@@ -296,6 +302,9 @@ class BlitzDataCollector:
         if game_stats.winner == "error":
             return "error"
         elif "time" in game_stats.result_string.lower():
+            return "time_forfeit"
+        # Check if either player ran out of time (clock <= 0)
+        elif game_stats.model_a_final_time <= 0 or game_stats.model_b_final_time <= 0:
             return "time_forfeit"
         elif game_stats.model_a_parsing_failures >= 3 or game_stats.model_b_parsing_failures >= 3:
             return "parsing_failure"

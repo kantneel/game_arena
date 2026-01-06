@@ -104,8 +104,14 @@ _REASONING_BUDGET_B = flags.DEFINE_integer(
 
 _FIRST_TO = flags.DEFINE_integer(
     "first_to",
-    1,
-    "Number of games needed to win the match (e.g., 4 for best-of-7).",
+    0,
+    "Number of games needed to win the match (e.g., 4 for best-of-7). Ignored if total_games is set.",
+)
+
+_TOTAL_GAMES = flags.DEFINE_integer(
+    "total_games",
+    0,
+    "Play exactly this many games regardless of score. If set, overrides first_to.",
 )
 
 _VERIFICATION_ONLY = flags.DEFINE_bool(
@@ -130,4 +136,46 @@ _MOVE_ANALYSIS_MULTIPV = flags.DEFINE_integer(
     "move_analysis_multipv",
     3,
     "Number of principal variations to analyze for move ranking.",
-) 
+)
+
+# Time pressure prompt experiment flags
+_ENABLE_TIME_PRESSURE_PROMPT = flags.DEFINE_bool(
+    "enable_time_pressure_prompt",
+    True,
+    "Include time pressure information in prompts. Set to False for ablation experiments.",
+)
+
+_USE_DRAMATIC_PROMPTS = flags.DEFINE_bool(
+    "use_dramatic_prompts",
+    False,
+    "Use dramatic ALL-CAPS time pressure prompts instead of standard prompts.",
+)
+
+# Response feedback experiment flags
+_ENABLE_RESPONSE_FEEDBACK = flags.DEFINE_bool(
+    "enable_response_feedback",
+    False,
+    "Include metadata about previous response (time, tokens, efficiency) in prompts.",
+)
+
+_ENABLE_EFFICIENCY_GUIDANCE = flags.DEFINE_bool(
+    "enable_efficiency_guidance",
+    False,
+    "Include calculated token/second rate and time estimates in prompts.",
+)
+
+# Notes/tags for experiment tracking
+_NOTES = flags.DEFINE_string(
+    "notes",
+    "",
+    "Optional notes or tags for experiment tracking. Saved to match metadata.",
+)
+
+# Move notation format
+_MOVE_NOTATION_FORMAT = flags.DEFINE_enum(
+    "move_notation_format",
+    "san",
+    ["san", "lan", "pgn"],
+    "Move notation format in prompts: 'san' (Standard Algebraic: 1. e4 e5), "
+    "'lan' (Long Algebraic: 1. e2e4 e7e5), 'pgn' (Full PGN with headers).",
+)

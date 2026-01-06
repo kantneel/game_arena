@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, GameDetail } from "@/lib/api";
 import { GameReplay } from "@/components/chess/GameReplay";
-import { TimeChart } from "@/components/charts/TimeChart";
+import { MoveAnalysisChart } from "@/components/charts/MoveAnalysisChart";
 
 export default function GameDetailPage() {
   const params = useParams();
@@ -120,13 +120,15 @@ export default function GameDetailPage() {
         />
       </div>
 
-      {/* Time Analysis */}
+      {/* Move Analysis */}
       {game.moves.length > 0 && (
         <div>
-          <h2 className="text-xl font-bold mb-4">Time Analysis</h2>
-          <div className="card p-6">
-            <TimeChart moves={game.moves} />
-          </div>
+          <h2 className="text-xl font-bold mb-4">Move Analysis</h2>
+          <MoveAnalysisChart 
+            moves={game.moves} 
+            whiteModel={game.white_model}
+            blackModel={game.black_model}
+          />
         </div>
       )}
 

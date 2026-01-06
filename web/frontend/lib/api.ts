@@ -17,12 +17,12 @@ export interface Match {
   ended_at: string | null;
   time_control: string;
   status: "completed" | "live";
+  notes?: string | null;
 }
 
 export interface MatchDetail extends Match {
   rethinking_enabled: boolean;
   games: GameSummary[];
-  current_game?: number;  // Current game being played (for live matches)
 }
 
 export interface GameSummary {
@@ -50,6 +50,16 @@ export interface MoveRecord {
   time_taken: number;
   time_remaining: number;
   thinking_tokens: number | null;
+  // Stockfish analysis (populated if move analysis was run)
+  centipawn_loss: number | null;
+  is_best_move: boolean | null;
+  is_blunder: boolean | null;  // True if CP loss >= 100
+  best_move: string | null;  // The engine's preferred move
+  win_probability_loss: number | null;  // WP loss from 0-1
+  // Position complexity metrics
+  num_legal_moves: number | null;  // Number of legal moves available
+  eval_sharpness: number | null;  // CP diff between best and 2nd best move
+  position_eval_abs: number | null;  // Absolute evaluation in CP
 }
 
 export interface ModelStats {
@@ -69,14 +79,179 @@ export interface Leaderboard {
   last_updated: string;
 }
 
-async function fetchJson<T>(endpoint: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${endpoint}`);
-  if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+// Analysis types
+export interface PressureStats {
+  pressure_level: string;
+  move_count: number;
+  avg_move_time: number;
+  std_move_time: number;
+  avg_thinking_tokens: number | null;
+  avg_centipawn_loss: number | null;
+  blunder_rate: number;
 }
 
+export interface ModelPressureProfile {
+  name: string;
+  total_moves: number;
+  speed_adaptation_ratio: number;
+  quality_degradation_ratio: number;
+  thinking_reduction_ratio: number;
+  pressure_stats: PressureStats[];
+}
+
+export interface MatchAnalysis {
+  match_id: string;
+  model_a: ModelPressureProfile;
+  model_b: ModelPressureProfile;
+  insights: string[];
+}
+
+export interface ScatterPoint {
+  model: string;
+  time_remaining: number;
+  move_time: number;
+  game_number: number;
+  move_number: number;
+  thinking_tokens: number | null;
+}
+
+export interface ScatterData {
+  model_a: string;
+  model_b: string;
+  points: ScatterPoint[];
+}
+
+export interface ThinkingByPressure {
+  model_a: string;
+  model_b: string;
+  data: {
+    pressure: string;
+    model_a_avg_tokens: number;
+    model_b_avg_tokens: number;
+    model_a_avg_time: number;
+    model_b_avg_time: number;
+    model_a_count: number;
+    model_b_count: number;
+  }[];
+}
+
+// Offline Evaluation types
+export interface OfflineEvalSession {
+  session_id: string;
+  model_id: string;
+  dataset_name: string;
+  status: string;
+  start_time: string | null;
+  end_time: string | null;
+  result_count: number;
+  prompt_style: string;
+}
+
+export interface OfflineEvalSummary {
+  total_sessions: number;
+  total_evaluations: number;
+  models: string[];
+  prompt_styles: string[];
+  time_levels: number[];
+  overall_timeout_rate: number;
+  has_move_quality: boolean;
+}
+
+export interface OfflineTimeoutData {
+  model_id: string;
+  time_remaining: number;
+  timeouts: number;
+  total: number;
+  rate: number;
+}
+
+export interface OfflineStyleTimeoutData {
+  model_id: string;
+  prompt_style: string;
+  timeouts: number;
+  total: number;
+  rate: number;
+}
+
+export interface OfflineTimeoutAnalysis {
+  by_model_time: OfflineTimeoutData[];
+  by_prompt_style: OfflineStyleTimeoutData[];
+}
+
+export interface OfflineResponseTimeData {
+  model_id: string;
+  time_remaining: number;
+  avg_response_time: number | null;
+  std_response_time: number | null;
+  avg_thinking_tokens: number | null;
+}
+
+export interface OfflineMoveQualityData {
+  model_id: string;
+  time_remaining: number;
+  avg_centipawn_loss: number | null;
+  blunder_rate: number | null;
+  best_move_rate: number | null;
+}
+
+export interface OfflineMoveQualityAnalysis {
+  available: boolean;
+  total_analyzed?: number;
+  by_model_time: OfflineMoveQualityData[];
+  by_prompt_style: {
+    model_id: string;
+    prompt_style: string;
+    avg_centipawn_loss: number | null;
+    blunder_rate: number | null;
+  }[];
+}
+
+export interface OfflineAblationComparison {
+  available: boolean;
+  styles?: string[];
+  models?: {
+    [model_id: string]: {
+      [style: string]: {
+        evaluations: number;
+        timeout_rate: number | null;
+        avg_response_time: number;
+        avg_thinking_tokens: number;
+        avg_centipawn_loss?: number;
+        blunder_rate?: number;
+      };
+    };
+  };
+}
+
+export interface ModelProfile {
+  model_id: string;
+  display_name: string;
+  total_matches: number;
+  total_games: number;
+  total_moves: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  elo: number;
+  win_rate: number;
+  avg_move_time: number;
+  avg_thinking_tokens: number | null;
+  speed_adaptation_ratio: number;
+  quality_degradation_ratio: number;
+  thinking_reduction_ratio: number;
+  pressure_stats: PressureStats[];
+  recent_matches: {
+    match_id: string;
+    opponent: string;
+    wins: number;
+    losses: number;
+    draws: number;
+    result: string;
+    date: string;
+  }[];
+}
+
+// New Match Configuration types
 export interface ModelInfo {
   id: string;
   name: string;
@@ -90,11 +265,6 @@ export interface TimeControlPreset {
   increment: number;
 }
 
-export interface ConfigResponse {
-  models: ModelInfo[];
-  time_control_presets: TimeControlPreset[];
-}
-
 export interface MatchConfig {
   model_a: string;
   model_b: string;
@@ -104,45 +274,53 @@ export interface MatchConfig {
   use_rethinking: boolean;
   max_rethinks: number;
   max_parsing_failures: number;
-  // Per-model reasoning configuration
   reasoning_budget_a: number;
   reasoning_budget_b: number;
-  show_reasoning_a?: boolean;
-  show_reasoning_b?: boolean;
+  show_reasoning_a: boolean;
+  show_reasoning_b: boolean;
+  notes?: string;
 }
 
-export interface StartMatchResponse {
-  status: string;
-  process_id?: number;
-  message: string;
-  command?: string;
-  error?: string;
-}
-
-export interface ProcessStatus {
+export interface ProcessDetail {
   pid: number;
-  status: "starting" | "running" | "completed" | "failed" | "stopped";
-  exit_code: number | null;
+  status: "running" | "completed" | "failed" | "stopped";
   model_a: string;
   model_b: string;
-  started_at: string;
   running_seconds: number;
-  log_count: number;
-  last_log: string | null;
   error: string | null;
-}
-
-export interface ProcessDetail extends ProcessStatus {
   logs: { time: string; line: string }[];
 }
 
+export interface ConfigResponse {
+  models: ModelInfo[];
+  time_control_presets: TimeControlPreset[];
+}
+
+async function fetchJson<T>(endpoint: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${endpoint}`);
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export const api = {
+  // Matches
   async getMatches(limit = 50, offset = 0): Promise<Match[]> {
     return fetchJson<Match[]>(`/matches?limit=${limit}&offset=${offset}`);
   },
 
   async getMatch(matchId: string): Promise<MatchDetail> {
     return fetchJson<MatchDetail>(`/matches/${matchId}`);
+  },
+
+  async deleteMatch(matchId: string): Promise<{ status: string; match_id: string }> {
+    const res = await fetch(`${API_BASE}/matches/${matchId}`, { method: "DELETE" });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "Failed to delete match" }));
+      throw new Error(error.detail || "Failed to delete match");
+    }
+    return res.json();
   },
 
   async getGame(matchId: string, gameNumber: number): Promise<GameDetail> {
@@ -153,10 +331,12 @@ export const api = {
     return fetchJson<GameDetail>(`/matches/${matchId}/live/${gameNumber}`);
   },
 
+  // Leaderboard
   async getLeaderboard(): Promise<Leaderboard> {
     return fetchJson<Leaderboard>("/leaderboard");
   },
 
+  // Live
   async getLiveMatches(): Promise<Match[]> {
     return fetchJson<Match[]>("/live/matches");
   },
@@ -166,9 +346,7 @@ export const api = {
   },
 
   async abandonMatch(matchId: string): Promise<{ status: string }> {
-    const res = await fetch(`${API_BASE}/live/abandon/${matchId}`, {
-      method: "POST",
-    });
+    const res = await fetch(`${API_BASE}/live/abandon/${matchId}`, { method: "POST" });
     return res.json();
   },
 
@@ -177,39 +355,87 @@ export const api = {
     return res.json();
   },
 
+  // Analysis
+  async getMatchAnalysis(matchId: string): Promise<MatchAnalysis> {
+    return fetchJson<MatchAnalysis>(`/analysis/matches/${matchId}`);
+  },
+
+  async getPressureScatter(matchId: string): Promise<ScatterData> {
+    return fetchJson<ScatterData>(`/analysis/matches/${matchId}/scatter`);
+  },
+
+  async getThinkingByPressure(matchId: string): Promise<ThinkingByPressure> {
+    return fetchJson<ThinkingByPressure>(`/analysis/matches/${matchId}/thinking`);
+  },
+
+  // Models
+  async getModels(): Promise<{ model_id: string; display_name: string; matches: number; wins: number; losses: number; win_rate: number }[]> {
+    return fetchJson(`/models`);
+  },
+
+  async getModelProfile(modelId: string): Promise<ModelProfile> {
+    return fetchJson<ModelProfile>(`/models/${modelId}`);
+  },
+
+  // Offline Evaluation
+  async getOfflineEvalSessions(): Promise<{ sessions: OfflineEvalSession[] }> {
+    return fetchJson(`/offline-eval/sessions`);
+  },
+
+  async getOfflineEvalSummary(): Promise<OfflineEvalSummary> {
+    return fetchJson(`/offline-eval/summary`);
+  },
+
+  async getOfflineEvalTimeouts(): Promise<OfflineTimeoutAnalysis> {
+    return fetchJson(`/offline-eval/analysis/timeouts`);
+  },
+
+  async getOfflineEvalResponseTimes(): Promise<{ data: OfflineResponseTimeData[] }> {
+    return fetchJson(`/offline-eval/analysis/response-times`);
+  },
+
+  async getOfflineEvalMoveQuality(): Promise<OfflineMoveQualityAnalysis> {
+    return fetchJson(`/offline-eval/analysis/move-quality`);
+  },
+
+  async getOfflineEvalAblation(): Promise<OfflineAblationComparison> {
+    return fetchJson(`/offline-eval/analysis/ablation`);
+  },
+
+  // Match Configuration & Process Management
   async getConfig(): Promise<ConfigResponse> {
     return fetchJson<ConfigResponse>("/config");
   },
 
-  async startMatch(config: MatchConfig): Promise<StartMatchResponse> {
+  async startMatch(config: MatchConfig): Promise<{ status: string; process_id?: number; error?: string; message?: string }> {
     const res = await fetch(`${API_BASE}/matches/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
     });
-    if (!res.ok) {
-      throw new Error(`Failed to start match: ${res.status}`);
-    }
     return res.json();
-  },
-
-  async getProcesses(): Promise<ProcessStatus[]> {
-    return fetchJson<ProcessStatus[]>("/matches/processes");
   },
 
   async getProcessDetail(pid: number): Promise<ProcessDetail> {
-    const res = await fetch(`${API_BASE}/matches/processes/${pid}`);
-    if (!res.ok) {
-      throw new Error(`Process not found: ${res.status}`);
-    }
-    return res.json();
+    return fetchJson<ProcessDetail>(`/matches/processes/${pid}`);
   },
 
   async stopProcess(pid: number): Promise<{ status: string }> {
-    const res = await fetch(`${API_BASE}/matches/processes/${pid}/stop`, {
-      method: "POST",
-    });
+    const res = await fetch(`${API_BASE}/matches/processes/${pid}/stop`, { method: "POST" });
     return res.json();
+  },
+
+  async getRunningProcesses(): Promise<{
+    pid: number;
+    status: string;
+    model_a: string;
+    model_b: string;
+    started_at: string;
+    running_seconds: number;
+    log_count: number;
+    last_log: string | null;
+  }[]> {
+    return fetchJson(`/matches/processes`);
   },
 };
 
@@ -258,4 +484,3 @@ export function createLiveConnection(
 
   return ws;
 }
-

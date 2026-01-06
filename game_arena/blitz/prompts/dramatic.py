@@ -88,11 +88,11 @@ def create_dramatic_instruction_text(time_remaining: float) -> str:
         Instruction text for the model
     """
     if time_remaining < 30:
-        return "MOVE NOW!!! Think for maximum 3 seconds, then output your answer! Time is running out!!!"
+        return "MOVE NOW!!! Minimal or no reasoning - just output your move immediately! Time is critical!!!"
     elif time_remaining < 60:
-        return "Think quickly and decide fast! Limit yourself to 10 seconds of analysis maximum!"
+        return "Very brief reasoning only! Decide within a few seconds!"
     elif time_remaining < 120:
-        return "Be efficient with your thinking time. Quick analysis, then move!"
+        return "Be efficient - reason only as much as needed for this position, then move!"
     else:
-        return "Reason step by step to come up with your move, then output your final answer in the format \"Final Answer: X\" where X is your chosen move in algebraic notation."
+        return "Reason as much as you think is necessary for this position (could be extensive or brief), then output your final answer in the format \"Final Answer: X\" where X is your chosen move in algebraic notation."
 

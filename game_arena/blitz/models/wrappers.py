@@ -35,7 +35,13 @@ class NoRetryModelWrapper:
     
     def generate_with_text_input(self, model_input: tournament_util.ModelTextInput) -> Tuple[tournament_util.GenerateReturn, int, float]:
         """
-        Generate with retry logic that doesn't count retry time.
+        Generate with retry logic that excludes failed call time from thinking time.
+        
+        The total_retry_time includes:
+        - Time spent on failed API calls (should not count as thinking)
+        - Sleep/delay time between retries
+        
+        To get actual thinking time: wall_clock_time - total_retry_time
         
         Returns:
             Tuple of (GenerateReturn, retry_count, total_retry_time)
@@ -45,9 +51,9 @@ class NoRetryModelWrapper:
         last_exception = None
         
         for attempt in range(self.max_retries + 1):
+            call_start = time.time()
             try:
                 # Time only the successful call - call _generate directly to bypass retry decorator
-                call_start = time.time()
                 
                 # Convert ModelTextInput to the format expected by _generate
                 if hasattr(self.wrapped_model, '_generate'):
@@ -66,14 +72,13 @@ class NoRetryModelWrapper:
                     # Fallback - use the wrapped method
                     result = self.wrapped_model.generate_with_text_input(model_input)
                 
-                call_end = time.time()
-                
-                # Only count the time of the successful call
-                actual_call_time = call_end - call_start
-                
+                # Success! Return the result
                 return result, retry_count, total_retry_time
                 
             except Exception as e:
+                call_end = time.time()
+                failed_call_time = call_end - call_start
+                
                 last_exception = e
                 
                 if not self._should_retry(e) or attempt >= self.max_retries:
@@ -84,14 +89,15 @@ class NoRetryModelWrapper:
                 retry_delay = self.base_delay * (2 ** attempt)  # Exponential backoff
                 retry_delay = min(retry_delay, 60.0)  # Cap at 60 seconds
                 
-                print(colored(f"API call failed (attempt {attempt + 1}), retrying in {retry_delay:.1f}s: {e}", "yellow"))
+                print(colored(f"API call failed (attempt {attempt + 1}, took {failed_call_time:.1f}s), retrying in {retry_delay:.1f}s: {e}", "yellow"))
                 
-                retry_start = time.time()
+                # Sleep before retry
                 time.sleep(retry_delay)
-                retry_end = time.time()
                 
                 retry_count += 1
-                total_retry_time += (retry_end - retry_start)
+                # Count BOTH the failed call time AND the sleep delay as "retry time"
+                # This ensures only the successful call's time counts as thinking time
+                total_retry_time += failed_call_time + retry_delay
         
         # If we get here, all retries failed
         raise last_exception

@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import matches, leaderboard, live, config
+from routers import matches, leaderboard, live, config, analysis, models, offline_eval
 from services.match_service import MatchService
 
 
@@ -45,6 +45,12 @@ app.include_router(matches.router, prefix="/api/matches", tags=["matches"])
 app.include_router(leaderboard.router, prefix="/api/leaderboard", tags=["leaderboard"])
 app.include_router(live.router, prefix="/api/live", tags=["live"])
 app.include_router(config.router, prefix="/api/config", tags=["config"])
+app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
+app.include_router(models.router, prefix="/api/models", tags=["models"])
+app.include_router(offline_eval.router)
+
+from routers import insights
+app.include_router(insights.router, prefix="/api/insights", tags=["insights"])
 
 
 @app.get("/")

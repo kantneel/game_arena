@@ -11,6 +11,7 @@ export function MatchCard({ match }: MatchCardProps) {
   const isModelAWinner = match.winner === "model_a";
   const isModelBWinner = match.winner === "model_b";
   const isDraw = match.winner === "draw";
+  const isIncomplete = match.total_games === 0 || (!isModelAWinner && !isModelBWinner && !isDraw && match.status === "completed");
 
   // Format date
   const date = new Date(match.started_at);
@@ -22,7 +23,7 @@ export function MatchCard({ match }: MatchCardProps) {
 
   return (
     <Link href={`/matches/${match.match_id}`}>
-      <div className="card-hover p-4 cursor-pointer">
+      <div className={`card-hover p-4 cursor-pointer ${isIncomplete ? "opacity-60" : ""}`}>
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
           <span className="text-xs text-gray-500">{formattedDate}</span>
@@ -72,13 +73,19 @@ export function MatchCard({ match }: MatchCardProps) {
 
         {/* Footer */}
         <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
-          <span>{match.total_games} games</span>
-          {isDraw ? (
+          <span>{match.total_games} game{match.total_games !== 1 ? 's' : ''}</span>
+          {match.status === "live" ? (
+            <span className="badge-live">🔴 Live</span>
+          ) : match.total_games === 0 ? (
+            <span className="text-gray-500">No games</span>
+          ) : isDraw ? (
             <span className="badge-draw">Draw</span>
-          ) : (
+          ) : isModelAWinner || isModelBWinner ? (
             <span className={isModelAWinner ? "badge-win" : "badge-loss"}>
-              {isModelAWinner ? match.model_a : match.model_b} wins
+              {isModelAWinner ? formatModelName(match.model_a) : formatModelName(match.model_b)} wins
             </span>
+          ) : (
+            <span className="text-gray-500">Incomplete</span>
           )}
         </div>
       </div>

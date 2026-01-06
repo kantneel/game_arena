@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { Chess } from "chess.js";
 import { ChessBoardComponent } from "@/components/chess/ChessBoard";
-import { api, MatchDetail, GameDetail } from "@/lib/api";
+import { api, MatchDetail, GameDetail, ProcessDetail } from "@/lib/api";
 
 interface LiveState {
   fen: string;
@@ -42,12 +43,57 @@ export default function LiveMatchPage() {
   });
 
   const [connected, setConnected] = useState(true);
+  const [showLogs, setShowLogs] = useState(false);
+  const [processDetail, setProcessDetail] = useState<ProcessDetail | null>(null);
+  const [processPid, setProcessPid] = useState<number | null>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const hasLoadedMatch = useRef(false);
+  
   const modelA = match?.model_a || "Model A";
   const modelB = match?.model_b || "Model B";
 
   // Fetch match details and poll for updates
   useEffect(() => {
     let isMounted = true;
+
+    // Build FEN from move history using chess.js
+    const buildFenFromMoves = (moves: GameDetail["moves"]): string => {
+      const startFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+      if (!moves || moves.length === 0) return startFen;
+      
+      try {
+        const chess = new Chess();
+        
+        for (const moveRecord of moves) {
+          try {
+            chess.move(moveRecord.move);
+          } catch (e) {
+            console.warn("Invalid move in sequence:", moveRecord.move);
+            break;
+          }
+        }
+        
+        return chess.fen();
+      } catch (e) {
+        console.error("Error building FEN:", e);
+        return startFen;
+      }
+    };
+
+    // Calculate remaining time from move history
+    const calculateRemainingTime = (moves: GameDetail["moves"], color: string, initialTime: number): number => {
+      const colorMoves = moves.filter(m => m.color === color);
+      if (colorMoves.length === 0) return initialTime;
+      
+      const lastColorMove = colorMoves[colorMoves.length - 1];
+      return lastColorMove.time_remaining;
+    };
+    
+    // Parse initial time from time control string (e.g., "300+3" -> 300)
+    const parseInitialTime = (timeControl: string): number => {
+      const match = timeControl.match(/^(\d+)/);
+      return match ? parseInt(match[1], 10) : 300;
+    };
 
     const fetchMatchData = async () => {
       try {
@@ -59,57 +105,82 @@ export default function LiveMatchPage() {
         
         setMatch(matchData);
         setLoading(false);
+        hasLoadedMatch.current = true;
+
+        // Determine which game to show:
+        // 1. Try the next game after completed ones (in case it's in progress)
+        // 2. Fall back to the last completed game if next game hasn't started
+        const completedGames = matchData.games?.length || 0;
+        const nextGameNum = completedGames + 1;
         
-        // Update scores
-        setState(prev => ({
-          ...prev,
-          modelAScore: matchData.model_a_score,
-          modelBScore: matchData.model_b_score,
-          gameNumber: matchData.games.length > 0 ? matchData.games.length : 1,
-        }));
-
-        // Get current game number from metadata or completed games + 1
-        // The current_game from metadata is more accurate for live matches
-        const completedGames = matchData.games.length;
-        const currentGameNum = matchData.current_game || completedGames + 1;
-
+        let gameData: GameDetail | null = null;
+        let gameNum = nextGameNum;
+        
         try {
-          // Use getLiveGame endpoint which can read in-progress moves
-          const gameData = await api.getLiveGame(matchId, currentGameNum);
-          if (!isMounted) return;
-          
-          setCurrentGame(gameData);
-          
-          if (gameData.moves && gameData.moves.length > 0) {
-            const lastMove = gameData.moves[gameData.moves.length - 1];
-            // Get FEN from last move (the position AFTER the move)
-            // We'd need to compute this, but for now use the move info
-            setState(prev => ({
-              ...prev,
-              lastMove: lastMove.move,
-              moveCount: gameData.moves.length,
-              // Determine who's to move based on move count
-              toMove: gameData.moves.length % 2 === 0 ? "model_a" : "model_b",
-              modelATime: calculateRemainingTime(gameData.moves, "white"),
-              modelBTime: calculateRemainingTime(gameData.moves, "black"),
-            }));
-            
-            // Build FEN from moves
-            const fen = buildFenFromMoves(gameData.moves);
-            if (fen) {
-              setState(prev => ({ ...prev, fen }));
+          // Try fetching the next game (in progress)
+          gameData = await api.getLiveGame(matchId, nextGameNum);
+        } catch {
+          // Next game doesn't exist yet - fall back to last completed game
+          if (completedGames > 0) {
+            gameNum = completedGames;
+            try {
+              gameData = await api.getGame(matchId, completedGames);
+            } catch {
+              // No game data available
             }
           }
-        } catch (gameErr) {
-          // Game might not exist yet if match just started
-          console.log("Game not available yet:", gameErr);
         }
+        if (!isMounted) return;
+        
+        if (!gameData) {
+          console.log("[Live] No game data available for game", nextGameNum);
+          return;
+        }
+        
+        console.log(`[Live] Game ${gameData.game_number}: ${gameData.moves?.length || 0} moves`);
+        
+        setCurrentGame(gameData);
+        
+        // Update state with game data
+        const moves = gameData.moves || [];
+        
+        // Build FEN from all moves using chess.js
+        const fen = buildFenFromMoves(moves);
+        const lastMove = moves.length > 0 ? moves[moves.length - 1] : null;
+        
+        // For odd games (1, 3, 5), model_a is white. For even games (2, 4, 6), model_b is white.
+        const actualGameNum = gameData.game_number || gameNum;
+        const modelAIsWhite = actualGameNum % 2 === 1;
+        const initialTime = parseInitialTime(matchData.time_control || "300+3");
+        
+        setState({
+          fen,
+          lastMove: lastMove?.move || null,
+          moveCount: moves.length,
+          // Who's to move: white moves on even move counts (0, 2, 4...), black on odd (1, 3, 5...)
+          toMove: moves.length % 2 === 0 
+            ? (modelAIsWhite ? "model_a" : "model_b")
+            : (modelAIsWhite ? "model_b" : "model_a"),
+          modelATime: modelAIsWhite 
+            ? calculateRemainingTime(moves, "white", initialTime)
+            : calculateRemainingTime(moves, "black", initialTime),
+          modelBTime: modelAIsWhite 
+            ? calculateRemainingTime(moves, "black", initialTime)
+            : calculateRemainingTime(moves, "white", initialTime),
+          gameNumber: actualGameNum,
+          modelAScore: matchData.model_a_score,
+          modelBScore: matchData.model_b_score,
+          thinkingPreview: "",
+        });
 
         setConnected(true);
       } catch (err) {
         if (!isMounted) return;
         console.error("Failed to fetch match:", err);
-        setError("Failed to load match");
+        if (!hasLoadedMatch.current) {
+          setError("Failed to load match");
+          setLoading(false);
+        }
         setConnected(false);
       }
     };
@@ -117,40 +188,67 @@ export default function LiveMatchPage() {
     // Initial fetch
     fetchMatchData();
     
-    // Poll every 3 seconds for updates
-    const interval = setInterval(fetchMatchData, 3000);
+    // Poll every 2 seconds for faster updates
+    const interval = setInterval(fetchMatchData, 1000);
 
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
-  // Calculate remaining time from move history
-  function calculateRemainingTime(moves: GameDetail["moves"], color: string): number {
-    const colorMoves = moves.filter(m => m.color === color);
-    if (colorMoves.length === 0) return state.modelATime; // Initial time
+  // Find and poll the process for this match
+  useEffect(() => {
+    if (!match) return;
     
-    const lastColorMove = colorMoves[colorMoves.length - 1];
-    return lastColorMove.time_remaining;
-  }
+    let isMounted = true;
 
-  // Build FEN from move history (simplified - just track position)
-  function buildFenFromMoves(moves: GameDetail["moves"]): string | null {
-    if (moves.length === 0) return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-    
-    // Get the FEN from the last move's fen_before, then we'd need to apply the move
-    // For now, use a simple approach - just return the fen_before of the last move
-    // and note that the actual position is one move ahead
-    const lastMove = moves[moves.length - 1];
-    if (lastMove.fen_before) {
-      // This is the position BEFORE the last move
-      // Ideally we'd compute the position after, but this gives us a close approximation
-      return lastMove.fen_before;
-    }
-    
-    return null;
-  }
+    const findAndPollProcess = async () => {
+      try {
+        // Find the process matching this match
+        if (!processPid) {
+          const processes = await api.getRunningProcesses();
+          const matchingProcess = processes.find(
+            p => p.model_a === match.model_a && p.model_b === match.model_b && p.status === "running"
+          );
+          if (matchingProcess && isMounted) {
+            setProcessPid(matchingProcess.pid);
+          }
+        }
+        
+        // Fetch logs if we have a PID
+        if (processPid) {
+          try {
+            const detail = await api.getProcessDetail(processPid);
+            if (isMounted) {
+              setProcessDetail(detail);
+              // Auto-scroll logs if panel is open
+              if (showLogs) {
+                logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+              }
+            }
+          } catch {
+            // Process may have ended, clear PID to search again
+            if (isMounted) {
+              setProcessPid(null);
+              setProcessDetail(null);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch process:", err);
+      }
+    };
+
+    findAndPollProcess();
+    const interval = setInterval(findAndPollProcess, 1000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [match, processPid, showLogs]);
 
   if (loading) {
     return (
@@ -174,7 +272,13 @@ export default function LiveMatchPage() {
 
   // Parse time control
   const timeControl = match?.time_control || "300+3";
-  const [initialTime] = timeControl.split("+").map(Number);
+  
+  // Determine which model is white for this game
+  const modelAIsWhite = state.gameNumber % 2 === 1;
+  const whiteModel = modelAIsWhite ? modelA : modelB;
+  const blackModel = modelAIsWhite ? modelB : modelA;
+  const whiteTime = modelAIsWhite ? state.modelATime : state.modelBTime;
+  const blackTime = modelAIsWhite ? state.modelBTime : state.modelATime;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -197,8 +301,18 @@ export default function LiveMatchPage() {
               Live: {modelA} vs {modelB}
             </h1>
           </div>
-          <div className="text-sm text-gray-500 mt-1">
-            {timeControl} • {match?.rethinking_enabled ? "Rethinking ON" : "Rethinking OFF"}
+          <div className="text-sm text-gray-500 mt-1 flex items-center gap-2 flex-wrap">
+            <span>{timeControl} • {match?.rethinking_enabled ? "Rethinking ON" : "Rethinking OFF"}</span>
+            {match?.notes && (
+              <span className="relative group cursor-help">
+                <span className="text-xs text-gray-400 bg-arena-border/50 px-2 py-0.5 rounded">
+                  📝 {match.notes.length > 30 ? match.notes.slice(0, 30) + "..." : match.notes}
+                </span>
+                <span className="absolute bottom-full left-0 mb-2 px-3 py-2 text-xs text-white bg-gray-800 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-normal pointer-events-none z-20 max-w-[300px]">
+                  {match.notes}
+                </span>
+              </span>
+            )}
           </div>
         </div>
         <div className="text-right">
@@ -214,14 +328,21 @@ export default function LiveMatchPage() {
         {/* Board */}
         <div className="lg:col-span-2">
           <div className="card p-6">
-            {/* Player Bar - Model A (top if black) */}
-            <div className="flex items-center justify-between mb-4 p-3 rounded-lg bg-arena-border/50">
+            {/* Player Bar - Black (top) */}
+            <div className={`flex items-center justify-between mb-4 p-3 rounded-lg ${
+              state.toMove === (modelAIsWhite ? "model_b" : "model_a") 
+                ? "bg-arena-accent/20 ring-1 ring-arena-accent" 
+                : "bg-arena-border/50"
+            }`}>
               <div className="flex items-center gap-3">
                 <span className="w-4 h-4 bg-gray-800 rounded border border-gray-600" />
-                <span className="font-medium">{modelA}</span>
+                <span className="font-medium">{blackModel}</span>
+                {state.toMove === (modelAIsWhite ? "model_b" : "model_a") && (
+                  <span className="text-xs text-arena-accent animate-pulse">thinking...</span>
+                )}
               </div>
               <div className="font-mono text-xl font-bold">
-                {formatTime(state.modelATime)}
+                {formatTime(blackTime)}
               </div>
             </div>
 
@@ -234,14 +355,21 @@ export default function LiveMatchPage() {
               />
             </div>
 
-            {/* Player Bar - Model B (bottom if white) */}
-            <div className="flex items-center justify-between mt-4 p-3 rounded-lg bg-arena-border/50">
+            {/* Player Bar - White (bottom) */}
+            <div className={`flex items-center justify-between mt-4 p-3 rounded-lg ${
+              state.toMove === (modelAIsWhite ? "model_a" : "model_b") 
+                ? "bg-arena-accent/20 ring-1 ring-arena-accent" 
+                : "bg-arena-border/50"
+            }`}>
               <div className="flex items-center gap-3">
                 <span className="w-4 h-4 bg-white rounded" />
-                <span className="font-medium">{modelB}</span>
+                <span className="font-medium">{whiteModel}</span>
+                {state.toMove === (modelAIsWhite ? "model_a" : "model_b") && (
+                  <span className="text-xs text-arena-accent animate-pulse">thinking...</span>
+                )}
               </div>
               <div className="font-mono text-xl font-bold">
-                {formatTime(state.modelBTime)}
+                {formatTime(whiteTime)}
               </div>
             </div>
           </div>
@@ -325,7 +453,7 @@ export default function LiveMatchPage() {
                 }`}
               />
               <span className="text-sm text-gray-400">
-                {connected ? "Connected • Polling every 3s" : "Reconnecting..."}
+                {connected ? "Connected • Polling every 2s" : "Reconnecting..."}
               </span>
             </div>
             {state.moveCount > 0 && (
@@ -334,8 +462,95 @@ export default function LiveMatchPage() {
               </div>
             )}
           </div>
+
+          {/* Show Logs Button */}
+          <button
+            onClick={() => setShowLogs(!showLogs)}
+            className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
+              showLogs 
+                ? "bg-arena-accent text-white" 
+                : "bg-arena-border text-gray-400 hover:bg-gray-700 hover:text-white"
+            }`}
+          >
+            {showLogs ? "▼ Hide Logs" : "▶ Show Live Logs"}
+            {processDetail && (
+              <span className="ml-2 text-xs opacity-70">
+                ({processDetail.logs.length} lines)
+              </span>
+            )}
+          </button>
         </div>
       </div>
+
+      {/* Live Logs Panel (Collapsible) */}
+      {showLogs && (
+        <div className="card p-4 space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2">
+              <span>📋</span> Process Logs
+              {processDetail && (
+                <span className={`px-2 py-0.5 rounded text-xs ${
+                  processDetail.status === "running" 
+                    ? "bg-blue-500/20 text-blue-400" 
+                    : processDetail.status === "completed"
+                    ? "bg-green-500/20 text-green-400"
+                    : "bg-red-500/20 text-red-400"
+                }`}>
+                  {processDetail.status}
+                </span>
+              )}
+            </h3>
+            {processPid && (
+              <span className="text-xs text-gray-600">PID: {processPid}</span>
+            )}
+          </div>
+          
+          <div className="bg-black rounded-lg p-4 max-h-80 overflow-y-auto font-mono text-xs">
+            {!processDetail ? (
+              <div className="text-gray-500 italic">
+                {processPid ? "Loading logs..." : "No active process found for this match"}
+              </div>
+            ) : processDetail.logs.length === 0 ? (
+              <div className="text-gray-500 italic">Waiting for output...</div>
+            ) : (
+              processDetail.logs.map((log, i) => {
+                // Strip ANSI color codes
+                const cleanLine = log.line.replace(/\u001b\[[0-9;]*m/g, "");
+                
+                // Determine line color based on content
+                const lineColor = 
+                  cleanLine.includes("Error") || cleanLine.includes("❌") || cleanLine.includes("failed")
+                    ? "text-red-400"
+                    : cleanLine.includes("✅") || cleanLine.includes("🎉") || cleanLine.includes("WINNER")
+                    ? "text-green-400"
+                    : cleanLine.includes("⏰") || cleanLine.includes("Thinking time")
+                    ? "text-blue-400"
+                    : cleanLine.includes("===") || cleanLine.includes("BLITZ")
+                    ? "text-cyan-400 font-bold"
+                    : cleanLine.includes("Move ") && cleanLine.includes("turn")
+                    ? "text-yellow-400"
+                    : cleanLine.includes("Final move:")
+                    ? "text-green-300"
+                    : cleanLine.startsWith("I") && cleanLine.includes("HTTP Request")
+                    ? "text-gray-700"  // Dim the HTTP logs
+                    : "text-gray-300";
+                
+                return (
+                  <div key={i} className="py-0.5 leading-relaxed">
+                    <span className="text-gray-700 mr-2 select-none">
+                      {new Date(log.time).toLocaleTimeString()}
+                    </span>
+                    <span className={lineColor}>
+                      {cleanLine}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+            <div ref={logsEndRef} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

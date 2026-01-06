@@ -7,6 +7,10 @@ const navItems = [
   { href: "/", label: "Home" },
   { href: "/live", label: "Live", badge: true },
   { href: "/matches", label: "Matches" },
+  { href: "/insights", label: "Insights" },
+  { href: "/models", label: "Models" },
+  { href: "/offline-eval", label: "Experiments" },
+  { href: "/prompts", label: "Prompts" },
   { href: "/leaderboard", label: "Rankings" },
   { href: "/new-match", label: "New Match", highlight: true },
 ];

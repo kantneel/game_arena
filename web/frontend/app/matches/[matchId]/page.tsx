@@ -4,13 +4,16 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, MatchDetail, GameSummary } from "@/lib/api";
-import { TimeChart } from "@/components/charts/TimeChart";
+import { MatchAnalysisTab } from "@/components/analysis/MatchAnalysisTab";
+
+type TabId = "games" | "analysis";
 
 export default function MatchDetailPage() {
   const params = useParams();
   const matchId = params.matchId as string;
   const [match, setMatch] = useState<MatchDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabId>("games");
 
   useEffect(() => {
     async function fetchMatch() {
@@ -51,6 +54,11 @@ export default function MatchDetailPage() {
   const isModelAWinner = match.winner === "model_a";
   const isModelBWinner = match.winner === "model_b";
 
+  const tabs: { id: TabId; label: string; icon: string }[] = [
+    { id: "games", label: "Games", icon: "♟️" },
+    { id: "analysis", label: "Time Pressure Analysis", icon: "📊" },
+  ];
+
   return (
     <div className="space-y-8 animate-fade-in">
       {/* Header */}
@@ -75,13 +83,14 @@ export default function MatchDetailPage() {
         <div className="flex items-center justify-between max-w-2xl mx-auto">
           {/* Model A */}
           <div className="text-center flex-1">
-            <div
-              className={`text-xl font-bold ${
-                isModelAWinner ? "text-arena-win" : "text-gray-200"
-              }`}
+            <Link
+              href={`/models/${encodeURIComponent(match.model_a)}`}
+              className="text-xl font-bold hover:text-arena-accent transition-colors block"
             >
-              {match.model_a}
-            </div>
+              <span className={isModelAWinner ? "text-arena-win" : "text-gray-200"}>
+                {match.model_a}
+              </span>
+            </Link>
             {isModelAWinner && (
               <div className="text-arena-win text-sm mt-1">👑 Winner</div>
             )}
@@ -105,13 +114,14 @@ export default function MatchDetailPage() {
 
           {/* Model B */}
           <div className="text-center flex-1">
-            <div
-              className={`text-xl font-bold ${
-                isModelBWinner ? "text-arena-win" : "text-gray-200"
-              }`}
+            <Link
+              href={`/models/${encodeURIComponent(match.model_b)}`}
+              className="text-xl font-bold hover:text-arena-accent transition-colors block"
             >
-              {match.model_b}
-            </div>
+              <span className={isModelBWinner ? "text-arena-win" : "text-gray-200"}>
+                {match.model_b}
+              </span>
+            </Link>
             {isModelBWinner && (
               <div className="text-arena-win text-sm mt-1">👑 Winner</div>
             )}
@@ -119,6 +129,43 @@ export default function MatchDetailPage() {
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="border-b border-arena-border">
+        <div className="flex gap-4">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-3 font-medium transition-colors relative ${
+                activeTab === tab.id
+                  ? "text-arena-accent"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              <span className="mr-2">{tab.icon}</span>
+              {tab.label}
+              {activeTab === tab.id && (
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-arena-accent" />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === "games" && (
+        <GamesTab match={match} matchId={matchId} />
+      )}
+      {activeTab === "analysis" && (
+        <MatchAnalysisTab matchId={matchId} />
+      )}
+    </div>
+  );
+}
+
+function GamesTab({ match, matchId }: { match: MatchDetail; matchId: string }) {
+  return (
+    <div className="space-y-8 animate-fade-in">
       {/* Games Table */}
       <div>
         <h2 className="text-xl font-bold mb-4">Games</h2>
@@ -241,4 +288,3 @@ function formatDuration(seconds: number): string {
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
-

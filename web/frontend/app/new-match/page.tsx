@@ -41,6 +41,9 @@ export default function NewMatchPage() {
   const [reasoningBudgetB, setReasoningBudgetB] = useState(8000);
   const [showReasoningA, setShowReasoningA] = useState(false);
   const [showReasoningB, setShowReasoningB] = useState(false);
+  
+  // Notes/tags for experiment tracking
+  const [notes, setNotes] = useState("");
 
   useEffect(() => {
     async function fetchConfig() {
@@ -150,6 +153,7 @@ export default function NewMatchPage() {
         reasoning_budget_b: reasoningBudgetB,
         show_reasoning_a: showReasoningA,
         show_reasoning_b: showReasoningB,
+        notes: notes.trim() || undefined,
       };
 
       const result = await api.startMatch(config);
@@ -475,6 +479,23 @@ export default function NewMatchPage() {
           </div>
           <p className="text-xs text-gray-500">
             Best of {firstTo * 2 - 1} games (up to {firstTo * 2 - 1} games may be played)
+          </p>
+        </div>
+
+        {/* Notes Field */}
+        <div className="space-y-2 pt-4 border-t border-arena-border">
+          <label className="block text-sm font-medium text-gray-400">
+            Notes <span className="text-gray-600">(optional)</span>
+          </label>
+          <input
+            type="text"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g., Experiment #5, Testing time pressure, Baseline run..."
+            className="w-full bg-arena-bg border border-arena-border rounded-lg px-4 py-3 text-white placeholder-gray-600 focus:border-arena-accent focus:outline-none transition-colors"
+          />
+          <p className="text-xs text-gray-500">
+            Add notes or tags to categorize this match for experiment tracking
           </p>
         </div>
       </div>

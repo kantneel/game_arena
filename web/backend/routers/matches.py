@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Match-related API endpoints."""
 
+import shutil
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Request
 
 from models.schemas import MatchSummary, MatchDetail, GameDetail
@@ -18,56 +21,6 @@ async def list_matches(
     """Get all matches, sorted by most recent first."""
     match_service = request.app.state.match_service
     return match_service.get_all_matches(limit=limit, offset=offset)
-
-
-@router.get("/{match_id}", response_model=MatchDetail)
-async def get_match(request: Request, match_id: str):
-    """Get full details for a specific match."""
-    match_service = request.app.state.match_service
-    match = match_service.get_match(match_id)
-    
-    if not match:
-        raise HTTPException(status_code=404, detail=f"Match not found: {match_id}")
-    
-    return match
-
-
-@router.get("/{match_id}/games/{game_number}", response_model=GameDetail)
-async def get_game(request: Request, match_id: str, game_number: int):
-    """Get full details for a specific game including all moves."""
-    match_service = request.app.state.match_service
-    game = match_service.get_game(match_id, game_number)
-    
-    if not game:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Game {game_number} not found in match {match_id}"
-        )
-    
-    return game
-
-
-@router.get("/{match_id}/live/{game_number}", response_model=GameDetail)
-async def get_live_game(request: Request, match_id: str, game_number: int):
-    """Get live game data including moves from the current in-progress game.
-    
-    This endpoint works for games that are still in progress and haven't
-    been recorded in games_summary.csv yet.
-    """
-    match_service = request.app.state.match_service
-    
-    # Refresh to get latest data
-    match_service.scan_results()
-    
-    game = match_service.get_live_game(match_id, game_number)
-    
-    if not game:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Game {game_number} not found in match {match_id}"
-        )
-    
-    return game
 
 
 @router.post("/refresh")
@@ -146,4 +99,83 @@ async def test_subprocess():
         "stderr": result.stderr,
         "returncode": result.returncode,
     }
+
+
+@router.delete("/{match_id}")
+async def delete_match(request: Request, match_id: str):
+    """Delete a match and all its data.
+    
+    This permanently removes the match directory from the filesystem.
+    """
+    match_service = request.app.state.match_service
+    
+    if match_id not in match_service.matches:
+        raise HTTPException(status_code=404, detail=f"Match not found: {match_id}")
+    
+    metadata = match_service.matches[match_id]
+    match_dir = Path(metadata.get("_dir", ""))
+    
+    if not match_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Match directory not found: {match_id}")
+    
+    try:
+        # Remove the entire match directory
+        shutil.rmtree(match_dir)
+        
+        # Remove from cache
+        del match_service.matches[match_id]
+        
+        return {"status": "deleted", "match_id": match_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete match: {e}")
+
+
+@router.get("/{match_id}", response_model=MatchDetail)
+async def get_match(request: Request, match_id: str):
+    """Get full details for a specific match."""
+    match_service = request.app.state.match_service
+    match = match_service.get_match(match_id)
+    
+    if not match:
+        raise HTTPException(status_code=404, detail=f"Match not found: {match_id}")
+    
+    return match
+
+
+@router.get("/{match_id}/games/{game_number}", response_model=GameDetail)
+async def get_game(request: Request, match_id: str, game_number: int):
+    """Get full details for a specific game including all moves."""
+    match_service = request.app.state.match_service
+    game = match_service.get_game(match_id, game_number)
+    
+    if not game:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Game {game_number} not found in match {match_id}"
+        )
+    
+    return game
+
+
+@router.get("/{match_id}/live/{game_number}", response_model=GameDetail)
+async def get_live_game(request: Request, match_id: str, game_number: int):
+    """Get live game data including moves from the current in-progress game.
+    
+    This endpoint works for games that are still in progress and haven't
+    been recorded in games_summary.csv yet.
+    """
+    match_service = request.app.state.match_service
+    
+    # Refresh to get latest data
+    match_service.scan_results()
+    
+    game = match_service.get_live_game(match_id, game_number)
+    
+    if not game:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Game {game_number} not found in match {match_id}"
+        )
+    
+    return game
 

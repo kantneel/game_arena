@@ -32,6 +32,11 @@ class MoveAnalysis:
     played_win_probability: float  # Win probability after played move (0.0-1.0)
     win_probability_loss: float  # Difference in win probability (0.0-1.0)
     
+    # Position complexity metrics
+    num_legal_moves: int  # Number of legal moves available (more = more complex)
+    eval_sharpness: int  # CP difference between best and 2nd best move (higher = more critical)
+    position_eval_abs: int  # Absolute evaluation in CP (0 = equal, higher = more decisive)
+    
     # Human-readable strings
     best_eval_str: str
     played_eval_str: str

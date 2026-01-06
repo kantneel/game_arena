@@ -28,12 +28,17 @@ class MatchMetadata:
     final_winner: str = ""
     match_duration_seconds: float = 0.0
     current_game: int = 0  # Which game is currently being played
+    first_to: int = 0  # 0 means not using first_to mode
+    total_games: int = 0  # 0 means not using fixed games mode  # Number of wins needed to win the match
     
     # New fields for time pressure features
     dramatic_prompts_enabled: bool = False
     stateful_agents_enabled: bool = False
     dramatic_threshold_seconds: float = 60.0  # Time threshold for dramatic prompts
     time_pressure_strategy: str = "none"  # "none", "dramatic", "stateful", "combined"
+    
+    # Notes/tags for experiment tracking
+    notes: Optional[str] = None
 
 
 @dataclasses.dataclass

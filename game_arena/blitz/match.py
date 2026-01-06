@@ -6,7 +6,7 @@ This is the main entry point for running blitz chess matches.
 
 import datetime
 import time
-from typing import Optional
+from typing import Optional, Dict
 
 from absl import app
 import termcolor
@@ -25,7 +25,7 @@ from game_arena.blitz.models import (
     handle_rethinking_move,
 )
 from game_arena.blitz.models.registry import get_model_from_registry
-from game_arena.blitz.prompts import create_time_aware_prompt_substitutions
+from game_arena.blitz.prompts import create_time_aware_prompt_substitutions, PreviousResponseData
 from game_arena.blitz.data import get_data_collector, create_analysis_notebook
 from game_arena.blitz.display import (
     format_time,
@@ -40,6 +40,45 @@ from game_arena.blitz.analysis.stockfish import MoveQualityAnalyzer
 from game_arena.blitz import flags as game_flags
 
 colored = termcolor.colored
+
+
+def run_single_game_analysis(match_id: str, game_number: int, collector) -> bool:
+    """Run Stockfish move quality analysis on a single game immediately after it completes."""
+    if not game_flags._RUN_MOVE_ANALYSIS.value:
+        return False
+    
+    try:
+        match_dir = collector.data_dir / match_id
+        game_file = match_dir / f"game_{game_number}_moves.csv"
+        
+        if not game_file.exists():
+            return False
+        
+        print(colored(f"🔬 Analyzing game {game_number} with Stockfish...", "cyan"))
+        
+        analyzer = MoveQualityAnalyzer(
+            default_depth=game_flags._MOVE_ANALYSIS_DEPTH.value,
+            default_multipv=game_flags._MOVE_ANALYSIS_MULTIPV.value
+        )
+        
+        # Analyze just this game
+        analyses = analyzer.analyze_game_file(
+            game_file,
+            depth=game_flags._MOVE_ANALYSIS_DEPTH.value,
+            multipv=game_flags._MOVE_ANALYSIS_MULTIPV.value
+        )
+        
+        # Save per-game analysis
+        if analyses:
+            output_file = match_dir / f"game_{game_number}_move_analysis.csv"
+            analyzer.save_game_analysis(analyses, output_file)
+            print(colored(f"✅ Game {game_number}: analyzed {len(analyses)} moves", "green"))
+        
+        return True
+        
+    except Exception as e:
+        print(colored(f"⚠️  Game {game_number} analysis failed: {e}", "yellow"))
+        return False
 
 
 def run_automatic_move_analysis(match_id: str, collector) -> bool:
@@ -213,6 +252,14 @@ def play_single_blitz_game(
     print(colored(f"⏰ Starting time: {format_time(game_flags._INITIAL_TIME_SECONDS.value)} each", "blue"))
     print(colored(f"⏰ Increment: +{game_flags._INCREMENT_SECONDS.value}s per move", "blue"))
     
+    # Print experiment flags
+    if not game_flags._ENABLE_TIME_PRESSURE_PROMPT.value:
+        print(colored("🔬 TIME PRESSURE PROMPTS: DISABLED (ablation experiment)", "yellow"))
+    if game_flags._ENABLE_RESPONSE_FEEDBACK.value:
+        print(colored("🔬 RESPONSE FEEDBACK: ENABLED (recurrent awareness)", "yellow"))
+    if game_flags._USE_DRAMATIC_PROMPTS.value:
+        print(colored("🔬 DRAMATIC PROMPTS: ENABLED", "yellow"))
+    
     if use_rethinking:
         white_sampler, black_sampler = move_strategy
         print(colored(f"🧠 Rethinking enabled: {game_flags._RETHINK_STRATEGY.value.value} (max {game_flags._MAX_RETHINKS.value} attempts)", "blue"))
@@ -221,6 +268,12 @@ def play_single_blitz_game(
     
     prompt_generator = prompt_generation.PromptGeneratorText()
     prompt_template = prompts.PromptTemplate.NO_LEGAL_ACTIONS
+    
+    # Track previous response data per player for response feedback
+    previous_response_data: dict[str, Optional[PreviousResponseData]] = {
+        "white": None,
+        "black": None,
+    }
     
     # Main game loop
     while not game_state.pyspiel_state.is_terminal() and game_state.move_count < game_flags._MAX_MOVES_PER_GAME.value:
@@ -239,12 +292,24 @@ def play_single_blitz_game(
         
         player_info['player_clock'].start_move()
         
+        # Get previous response data for this player
+        player_color = "white" if player_info['is_white'] else "black"
+        prev_response = previous_response_data.get(player_color)
+        
         prompt_substitutions = create_time_aware_prompt_substitutions(
             game_state.pyspiel_state, 
             player_info['player_clock'], 
             player_info['opponent_clock'], 
             game_flags._INCREMENT_SECONDS.value,
-            is_blitz=True
+            is_blitz=True,
+            use_dramatic_pressure=game_flags._USE_DRAMATIC_PROMPTS.value,
+            enable_time_pressure_prompt=game_flags._ENABLE_TIME_PRESSURE_PROMPT.value,
+            previous_response_data=prev_response,
+            enable_response_feedback=game_flags._ENABLE_RESPONSE_FEEDBACK.value,
+            enable_efficiency_guidance=game_flags._ENABLE_EFFICIENCY_GUIDANCE.value,
+            move_notation_format=game_flags._MOVE_NOTATION_FORMAT.value,
+            model_a_name=white_model_name if player_info['is_white'] else black_model_name,
+            model_b_name=black_model_name if player_info['is_white'] else white_model_name,
         )
         
         if use_rethinking:
@@ -264,6 +329,18 @@ def play_single_blitz_game(
             thinking_time = player_info['player_clock'].end_move(player_info['network_latency'], game_flags._INCREMENT_SECONDS.value)
             print(colored(f"⏰ Thinking time: {thinking_time:.2f}s", "blue"))
             
+            # Check if player ran out of time during thinking (before increment)
+            # Time remaining after move = time_at_start - thinking_time + increment
+            # If time_at_start - thinking_time <= 0, they flagged before completing the move
+            time_before_increment = time_at_turn_start - thinking_time
+            if time_before_increment <= 0:
+                print(colored(f"⏰ TIME FORFEIT! {player_info['player_name']} ran out of time during move! "
+                             f"(had {time_at_turn_start:.1f}s, took {thinking_time:.1f}s)", "red"))
+                # Current player loses - opponent wins
+                winner = game_state._map_winning_color_to_model_id(not player_info['is_white'])
+                result_string = "0-1" if player_info['is_white'] else "1-0"
+                return game_state._create_game_stats(winner, result_string)
+            
             if game_flags._SHOW_REASONING_TRACES.value:
                 response_obj = retry_info.get('response')
                 display_reasoning_traces(response_obj, retry_info.get('generate_returns'))
@@ -278,6 +355,20 @@ def play_single_blitz_game(
                 if not success:
                     game_state.increment_parsing_failures(player_info['is_white'])
                     continue
+                
+                # Update previous response data for this player (for response feedback)
+                response_obj = retry_info.get('response')
+                thinking_tokens = getattr(response_obj, 'reasoning_tokens', 0) or 0
+                output_tokens = getattr(response_obj, 'generation_tokens', 0) or 0
+                tokens_per_second = thinking_tokens / max(thinking_time, 0.1)
+                
+                previous_response_data[player_color] = PreviousResponseData(
+                    time_taken_seconds=thinking_time,
+                    thinking_tokens=thinking_tokens,
+                    output_tokens=output_tokens,
+                    tokens_per_second=tokens_per_second,
+                    time_remaining_after=player_info['player_clock'].time_remaining,
+                )
         else:
             prompt = prompt_generator.generate_prompt_with_text_only(
                 prompt_template=prompt_template,
@@ -291,6 +382,15 @@ def play_single_blitz_game(
                 
                 print(f"{player_info['player_name']} response: {response.main_response[:100]}...")
                 print(colored(f"⏰ Thinking time: {thinking_time:.2f}s", "blue"))
+                
+                # Check if player ran out of time during thinking (before increment)
+                time_before_increment = time_at_turn_start - thinking_time
+                if time_before_increment <= 0:
+                    print(colored(f"⏰ TIME FORFEIT! {player_info['player_name']} ran out of time during move! "
+                                 f"(had {time_at_turn_start:.1f}s, took {thinking_time:.1f}s)", "red"))
+                    winner = game_state._map_winning_color_to_model_id(not player_info['is_white'])
+                    result_string = "0-1" if player_info['is_white'] else "1-0"
+                    return game_state._create_game_stats(winner, result_string)
                 
                 if game_flags._SHOW_REASONING_TRACES.value:
                     display_reasoning_traces(response)
@@ -320,15 +420,44 @@ def play_single_blitz_game(
                 if not success:
                     game_state.increment_parsing_failures(player_info['is_white'])
                     continue
+                
+                # Update previous response data for this player (for response feedback)
+                thinking_tokens = getattr(response, 'reasoning_tokens', 0) or 0
+                output_tokens = getattr(response, 'generation_tokens', 0) or 0
+                tokens_per_second = thinking_tokens / max(thinking_time, 0.1)
+                
+                previous_response_data[player_color] = PreviousResponseData(
+                    time_taken_seconds=thinking_time,
+                    thinking_tokens=thinking_tokens,
+                    output_tokens=output_tokens,
+                    tokens_per_second=tokens_per_second,
+                    time_remaining_after=player_info['player_clock'].time_remaining,
+                )
     
     return game_state.calculate_final_result()
 
 
 def main(_) -> None:
+    total_games = game_flags._TOTAL_GAMES.value
     first_to = game_flags._FIRST_TO.value
-    max_games = first_to * 2 - 1
     
-    print(colored(f"=== BLITZ CHESS MATCH (FIRST TO {first_to}) ===", "magenta"))
+    # Determine match mode
+    if total_games > 0:
+        # Fixed number of games mode
+        max_games = total_games
+        match_mode = "fixed"
+        print(colored(f"=== BLITZ CHESS MATCH ({total_games} GAMES) ===", "magenta"))
+    elif first_to > 0:
+        # First-to-N mode
+        max_games = first_to * 2 - 1
+        match_mode = "first_to"
+        print(colored(f"=== BLITZ CHESS MATCH (FIRST TO {first_to}) ===", "magenta"))
+    else:
+        # Default to 1 game
+        first_to = 1
+        max_games = 1
+        match_mode = "first_to"
+        print(colored(f"=== BLITZ CHESS MATCH (1 GAME) ===", "magenta"))
     print(colored(f"⏰ Time Control: {game_flags._INITIAL_TIME_SECONDS.value}s + {game_flags._INCREMENT_SECONDS.value}s increment", "blue"))
     print(colored(f"🧠 Rethinking: {game_flags._USE_RETHINKING.value}", "blue"))
     print(colored(f"🤖 Model A: {game_flags._MODEL_A.value}", "blue"))
@@ -347,7 +476,10 @@ def main(_) -> None:
         max_parsing_failures=game_flags._MAX_PARSING_FAILURES.value,
         max_rethinks=game_flags._MAX_RETHINKS.value,
         reasoning_budget=game_flags._REASONING_BUDGET.value,
-        parser_choice=str(game_flags._PARSER_CHOICE.value)
+        parser_choice=str(game_flags._PARSER_CHOICE.value),
+        first_to=first_to if match_mode == "first_to" else 0,
+        total_games=total_games if match_mode == "fixed" else 0,
+        notes=game_flags._NOTES.value if game_flags._NOTES.value else None
     )
     
     print(colored(f"📊 Data collection started - Match ID: {match_id}", "green"))
@@ -383,7 +515,10 @@ def main(_) -> None:
     all_game_stats = []
     
     # Play games
-    while model_a_wins < first_to and model_b_wins < first_to and games_played < max_games:
+    while games_played < max_games:
+        # Check if match is decided (only for first_to mode)
+        if match_mode == "first_to" and (model_a_wins >= first_to or model_b_wins >= first_to):
+            break
         games_played += 1
         model_a_plays_white = (games_played % 2 == 1)
         
@@ -407,6 +542,9 @@ def main(_) -> None:
             increment=game_flags._INCREMENT_SECONDS.value
         )
         
+        # Run Stockfish analysis on this game immediately
+        run_single_game_analysis(match_id, games_played, collector)
+        
         if game_stats.winner == "model_a":
             model_a_wins += 1
         elif game_stats.winner == "model_b":
@@ -422,12 +560,22 @@ def main(_) -> None:
         print(colored(f"{model_b_name}: {model_b_wins} wins", "blue"))
         print(colored(f"Draws: {draws}", "yellow"))
         
-        if model_a_wins == first_to:
+        if match_mode == "first_to":
+            if model_a_wins == first_to:
+                print(colored(f"\n🎉 MATCH WINNER: {model_a_name.upper()}! ({model_a_wins}-{model_b_wins})", "green"))
+                break
+            elif model_b_wins == first_to:
+                print(colored(f"\n🎉 MATCH WINNER: {model_b_name.upper()}! ({model_b_wins}-{model_a_wins})", "green"))
+                break
+    
+    # Final result for fixed games mode
+    if match_mode == "fixed":
+        if model_a_wins > model_b_wins:
             print(colored(f"\n🎉 MATCH WINNER: {model_a_name.upper()}! ({model_a_wins}-{model_b_wins})", "green"))
-            break
-        elif model_b_wins == first_to:
+        elif model_b_wins > model_a_wins:
             print(colored(f"\n🎉 MATCH WINNER: {model_b_name.upper()}! ({model_b_wins}-{model_a_wins})", "green"))
-            break
+        else:
+            print(colored(f"\n🤝 MATCH DRAWN! ({model_a_wins}-{model_b_wins})", "yellow"))
     
     # End data collection
     final_scores = {"model_a": model_a_wins, "model_b": model_b_wins, "draws": draws}

@@ -28,6 +28,8 @@ class MatchConfig(BaseModel):
     reasoning_budget_b: int = 8000
     show_reasoning_a: bool = False
     show_reasoning_b: bool = False
+    # Optional notes/tags for experiment tracking
+    notes: Optional[str] = None
 
 
 @dataclass
@@ -74,6 +76,10 @@ class MatchRunner:
         # Add show reasoning traces if either model has it enabled
         if config.show_reasoning_a or config.show_reasoning_b:
             cmd.append("--show_reasoning_traces=true")
+        
+        # Add notes if provided
+        if config.notes:
+            cmd.append(f"--notes={config.notes}")
         
         try:
             # Set environment to force unbuffered output and colors

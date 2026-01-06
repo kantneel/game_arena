@@ -192,6 +192,18 @@ class MoveQualityAnalyzer:
                         rank = i
                         break
             
+            # Position complexity metrics
+            num_legal_moves = len(list(board.legal_moves))
+            
+            # Eval sharpness: difference between best and 2nd best move
+            eval_sharpness = 0
+            if len(infos) >= 2:
+                second_cp = self.score_to_cp(infos[1]["score"], color)
+                eval_sharpness = abs(best_cp - second_cp)
+            
+            # Absolute position evaluation (0 = equal, higher = more decisive)
+            position_eval_abs = abs(best_cp)
+            
             def fmt_score(score_cp):
                 if abs(score_cp) >= 99999:
                     return "MATE (for you)" if score_cp > 0 else "MATE (against you)"
@@ -212,6 +224,10 @@ class MoveQualityAnalyzer:
                 "best_win_probability": best_win_prob,
                 "played_win_probability": played_win_prob,
                 "win_probability_loss": win_prob_loss,
+                # Position complexity metrics
+                "num_legal_moves": num_legal_moves,
+                "eval_sharpness": eval_sharpness,
+                "position_eval_abs": position_eval_abs,
                 "pretty": {
                     "best_move_san": board.san(best_move) if best_move else None,
                     "best_eval_str": fmt_score(best_cp),
@@ -263,6 +279,9 @@ class MoveQualityAnalyzer:
                     best_win_probability=result['best_win_probability'],
                     played_win_probability=result['played_win_probability'],
                     win_probability_loss=result['win_probability_loss'],
+                    num_legal_moves=result['num_legal_moves'],
+                    eval_sharpness=result['eval_sharpness'],
+                    position_eval_abs=result['position_eval_abs'],
                     best_eval_str=result['pretty']['best_eval_str'],
                     played_eval_str=result['pretty']['played_eval_str'],
                     cp_loss_str=result['pretty']['cp_loss_str'],
@@ -284,6 +303,46 @@ class MoveQualityAnalyzer:
         
         return analyses
     
+    def analyze_game_file(self,
+                         game_file: Union[str, Path],
+                         depth: Optional[int] = None,
+                         multipv: Optional[int] = None) -> List[MoveAnalysis]:
+        """Analyze all moves in a single game file.
+        
+        Args:
+            game_file: Path to game_N_moves.csv file
+            depth: Stockfish search depth
+            multipv: Number of principal variations
+            
+        Returns:
+            List of MoveAnalysis objects for each move in the game
+        """
+        game_file = Path(game_file)
+        match_dir = game_file.parent
+        match_id = match_dir.name
+        
+        # Extract game number from filename (e.g., "game_1_moves.csv" -> 1)
+        game_num = int(game_file.stem.split('_')[1])
+        
+        moves_df = pd.read_csv(game_file)
+        return self.analyze_game_moves(
+            moves_df, match_id, game_num, depth=depth, multipv=multipv
+        )
+    
+    def save_game_analysis(self, analyses: List[MoveAnalysis], output_file: Union[str, Path]) -> None:
+        """Save analysis results for a single game to a CSV file.
+        
+        Args:
+            analyses: List of MoveAnalysis objects
+            output_file: Path where to save the CSV file
+        """
+        if not analyses:
+            return
+            
+        analysis_dicts = [asdict(analysis) for analysis in analyses]
+        df = pd.DataFrame(analysis_dicts)
+        df.to_csv(output_file, index=False)
+
     def analyze_match_directory(self,
                                match_dir: Union[str, Path],
                                depth: Optional[int] = None,
